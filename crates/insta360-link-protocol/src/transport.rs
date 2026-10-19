@@ -100,16 +100,24 @@ pub struct NusbTransport {
 }
 
 #[cfg(target_os = "linux")]
-fn open_linux_v4l2_node(vid: u16, pid: u16) -> Option<std::fs::File> {
+fn open_linux_v4l2_node(vid: u16, pid: u16, xu1_id: u8) -> Option<std::fs::File> {
     let vid_hex = format!("{:04x}", vid);
     let pid_hex = format!("{:04x}", pid);
     let entries = std::fs::read_dir("/sys/class/video4linux").ok()?;
+    let mut candidates: Vec<(u32, std::path::PathBuf, String)> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if !name.starts_with("video") {
-            continue;
+        if let Some(num_str) = name.strip_prefix("video") {
+            if let Ok(num) = num_str.parse::<u32>() {
+                candidates.push((num, entry.path(), name));
+            }
         }
-        let dev_link = entry.path().join("device");
+    }
+    candidates.sort_by_key(|(num, _, _)| *num);
+
+    let mut fallback: Option<std::fs::File> = None;
+    for (_, path, name) in candidates {
+        let dev_link = path.join("device");
         let Ok(canon) = std::fs::canonicalize(&dev_link) else {
             continue;
         };
@@ -130,12 +138,28 @@ fn open_linux_v4l2_node(vid: u16, pid: u16) -> Option<std::fs::File> {
                     .write(true)
                     .open(&dev_path)
                 {
-                    return Some(file);
+                    // Verify this V4L2 node is the primary video capture node (which supports
+                    // UVCIOC_CTRL_QUERY), not the secondary metadata node (/dev/video1).
+                    let mut len_buf = [0u8; 2];
+                    if linux_uvcioc_ctrl_query(
+                        &file,
+                        xu1_id,
+                        0x03,
+                        UvcRequest::GetLen as u8,
+                        &mut len_buf,
+                    )
+                    .is_ok()
+                    {
+                        return Some(file);
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(file);
+                    }
                 }
             }
         }
     }
-    None
+    fallback
 }
 
 #[cfg(target_os = "linux")]
@@ -149,7 +173,140 @@ struct LinuxUvcXuControlQuery {
 }
 
 #[cfg(target_os = "linux")]
+#[repr(C)]
+struct LinuxV4l2Control {
+    id: u32,
+    value: i32,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct LinuxV4l2QueryCtrl {
+    id: u32,
+    ctrl_type: u32,
+    name: [u8; 32],
+    minimum: i32,
+    maximum: i32,
+    step: i32,
+    default_value: i32,
+    flags: u32,
+    reserved: [u32; 2],
+}
+
+#[cfg(target_os = "linux")]
 const UVCIOC_CTRL_QUERY: libc::c_ulong = 0xC010_7521;
+#[cfg(target_os = "linux")]
+const VIDIOC_G_CTRL: libc::c_ulong = 0xC008_561B;
+#[cfg(target_os = "linux")]
+const VIDIOC_S_CTRL: libc::c_ulong = 0xC008_561C;
+#[cfg(target_os = "linux")]
+const VIDIOC_QUERYCTRL: libc::c_ulong = 0xC044_5624;
+
+#[cfg(target_os = "linux")]
+const V4L2_CID_BRIGHTNESS: u32 = 0x0098_0900;
+#[cfg(target_os = "linux")]
+const V4L2_CID_CONTRAST: u32 = 0x0098_0901;
+#[cfg(target_os = "linux")]
+const V4L2_CID_SATURATION: u32 = 0x0098_0902;
+#[cfg(target_os = "linux")]
+const V4L2_CID_AUTO_WHITE_BALANCE: u32 = 0x0098_090C;
+#[cfg(target_os = "linux")]
+const V4L2_CID_POWER_LINE_FREQUENCY: u32 = 0x0098_0918;
+#[cfg(target_os = "linux")]
+const V4L2_CID_WHITE_BALANCE_TEMPERATURE: u32 = 0x0098_091A;
+#[cfg(target_os = "linux")]
+const V4L2_CID_SHARPNESS: u32 = 0x0098_091B;
+
+#[cfg(target_os = "linux")]
+const V4L2_CID_PAN_ABSOLUTE: u32 = 0x009A_0908;
+#[cfg(target_os = "linux")]
+const V4L2_CID_TILT_ABSOLUTE: u32 = 0x009A_0909;
+#[cfg(target_os = "linux")]
+const V4L2_CID_FOCUS_ABSOLUTE: u32 = 0x009A_090A;
+#[cfg(target_os = "linux")]
+const V4L2_CID_FOCUS_AUTO: u32 = 0x009A_090C;
+#[cfg(target_os = "linux")]
+const V4L2_CID_ZOOM_ABSOLUTE: u32 = 0x009A_090D;
+
+#[cfg(target_os = "linux")]
+fn linux_uvc_to_v4l2_cid(unit_ids: &UvcUnitIds, unit_id: u8, selector: u8) -> Option<u32> {
+    if unit_id == unit_ids.processing_unit_id {
+        match selector {
+            pu_selectors::BRIGHTNESS => Some(V4L2_CID_BRIGHTNESS),
+            pu_selectors::CONTRAST => Some(V4L2_CID_CONTRAST),
+            pu_selectors::SATURATION => Some(V4L2_CID_SATURATION),
+            pu_selectors::SHARPNESS => Some(V4L2_CID_SHARPNESS),
+            pu_selectors::WHITE_BALANCE_TEMPERATURE => Some(V4L2_CID_WHITE_BALANCE_TEMPERATURE),
+            pu_selectors::WHITE_BALANCE_TEMPERATURE_AUTO => Some(V4L2_CID_AUTO_WHITE_BALANCE),
+            pu_selectors::POWER_LINE_FREQUENCY => Some(V4L2_CID_POWER_LINE_FREQUENCY),
+            _ => None,
+        }
+    } else if unit_id == unit_ids.input_terminal_id {
+        match selector {
+            ct_selectors::ZOOM_ABSOLUTE => Some(V4L2_CID_ZOOM_ABSOLUTE),
+            ct_selectors::FOCUS_ABSOLUTE => Some(V4L2_CID_FOCUS_ABSOLUTE),
+            ct_selectors::FOCUS_AUTO => Some(V4L2_CID_FOCUS_AUTO),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_v4l2_set_ctrl(file: &std::fs::File, id: u32, value: i32) -> Result<(), TransportError> {
+    use std::os::unix::io::AsRawFd;
+    let mut ctrl = LinuxV4l2Control { id, value };
+    let rc = unsafe { libc::ioctl(file.as_raw_fd(), VIDIOC_S_CTRL, &mut ctrl) };
+    if rc < 0 {
+        Err(TransportError::Usb(
+            std::io::Error::last_os_error().to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_v4l2_get_ctrl(file: &std::fs::File, id: u32) -> Result<i32, TransportError> {
+    use std::os::unix::io::AsRawFd;
+    let mut ctrl = LinuxV4l2Control { id, value: 0 };
+    let rc = unsafe { libc::ioctl(file.as_raw_fd(), VIDIOC_G_CTRL, &mut ctrl) };
+    if rc < 0 {
+        Err(TransportError::Usb(
+            std::io::Error::last_os_error().to_string(),
+        ))
+    } else {
+        Ok(ctrl.value)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_v4l2_query_ctrl(
+    file: &std::fs::File,
+    id: u32,
+) -> Result<LinuxV4l2QueryCtrl, TransportError> {
+    use std::os::unix::io::AsRawFd;
+    let mut q = LinuxV4l2QueryCtrl {
+        id,
+        ctrl_type: 0,
+        name: [0u8; 32],
+        minimum: 0,
+        maximum: 0,
+        step: 0,
+        default_value: 0,
+        flags: 0,
+        reserved: [0u32; 2],
+    };
+    let rc = unsafe { libc::ioctl(file.as_raw_fd(), VIDIOC_QUERYCTRL, &mut q) };
+    if rc < 0 {
+        Err(TransportError::Usb(
+            std::io::Error::last_os_error().to_string(),
+        ))
+    } else {
+        Ok(q)
+    }
+}
 
 #[cfg(target_os = "linux")]
 fn linux_uvcioc_ctrl_query(
@@ -209,7 +366,11 @@ impl NusbTransport {
             .ok();
 
         #[cfg(target_os = "linux")]
-        let v4l_file = open_linux_v4l2_node(info.vendor_id, info.product_id);
+        let v4l_file = open_linux_v4l2_node(
+            info.vendor_id,
+            info.product_id,
+            info.unit_ids.extension_unit_id,
+        );
 
         Ok(Self {
             info,
@@ -255,11 +416,53 @@ impl UvcControlTransport for NusbTransport {
 
         #[cfg(target_os = "linux")]
         if let Some(v4l) = &self.v4l_file {
-            let mut buf = payload.to_vec();
-            if linux_uvcioc_ctrl_query(v4l, unit_id, selector, UvcRequest::SetCur as u8, &mut buf)
+            if is_xu {
+                let mut buf = payload.to_vec();
+                if linux_uvcioc_ctrl_query(
+                    v4l,
+                    unit_id,
+                    selector,
+                    UvcRequest::SetCur as u8,
+                    &mut buf,
+                )
                 .is_ok()
+                {
+                    return Ok(());
+                }
+            } else if unit_id == self.info.unit_ids.input_terminal_id
+                && selector == ct_selectors::PANTILT_ABSOLUTE
+                && payload.len() >= 8
             {
-                return Ok(());
+                let pan = i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                let tilt = i32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                let r1 = linux_v4l2_set_ctrl(v4l, V4L2_CID_PAN_ABSOLUTE, pan);
+                let r2 = linux_v4l2_set_ctrl(v4l, V4L2_CID_TILT_ABSOLUTE, tilt);
+                if r1.is_ok() || r2.is_ok() {
+                    return Ok(());
+                }
+            } else if let Some(cid) =
+                linux_uvc_to_v4l2_cid(&self.info.unit_ids, unit_id, selector)
+            {
+                let val: i32 = match payload.len() {
+                    1 => payload[0] as i32,
+                    2 => {
+                        if cid == V4L2_CID_BRIGHTNESS {
+                            i16::from_le_bytes([payload[0], payload[1]]) as i32
+                        } else {
+                            u16::from_le_bytes([payload[0], payload[1]]) as i32
+                        }
+                    }
+                    4 => i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]),
+                    _ => 0,
+                };
+                if linux_v4l2_set_ctrl(v4l, cid, val).is_ok() {
+                    return Ok(());
+                }
+                if cid == V4L2_CID_POWER_LINE_FREQUENCY && val == 3 {
+                    if linux_v4l2_set_ctrl(v4l, cid, 2).is_ok() {
+                        return Ok(());
+                    }
+                }
             }
         }
 
@@ -321,9 +524,49 @@ impl UvcControlTransport for NusbTransport {
 
         #[cfg(target_os = "linux")]
         if let Some(v4l) = &self.v4l_file {
-            let mut buf = vec![0u8; actual_len];
-            if linux_uvcioc_ctrl_query(v4l, unit_id, selector, req as u8, &mut buf).is_ok() {
-                return Ok(buf);
+            if is_xu {
+                let mut buf = vec![0u8; actual_len];
+                if linux_uvcioc_ctrl_query(v4l, unit_id, selector, req as u8, &mut buf).is_ok() {
+                    return Ok(buf);
+                }
+            } else if unit_id == self.info.unit_ids.input_terminal_id
+                && selector == ct_selectors::PANTILT_ABSOLUTE
+                && req == UvcRequest::GetCur
+            {
+                if let (Ok(pan), Ok(tilt)) = (
+                    linux_v4l2_get_ctrl(v4l, V4L2_CID_PAN_ABSOLUTE),
+                    linux_v4l2_get_ctrl(v4l, V4L2_CID_TILT_ABSOLUTE),
+                ) {
+                    let mut out = vec![0u8; 8];
+                    out[0..4].copy_from_slice(&pan.to_le_bytes());
+                    out[4..8].copy_from_slice(&tilt.to_le_bytes());
+                    return Ok(out);
+                }
+            } else if let Some(cid) =
+                linux_uvc_to_v4l2_cid(&self.info.unit_ids, unit_id, selector)
+            {
+                let v4l_val: Result<i32, TransportError> = match req {
+                    UvcRequest::GetCur => linux_v4l2_get_ctrl(v4l, cid),
+                    UvcRequest::GetMin => linux_v4l2_query_ctrl(v4l, cid).map(|q| q.minimum),
+                    UvcRequest::GetMax => linux_v4l2_query_ctrl(v4l, cid).map(|q| q.maximum),
+                    UvcRequest::GetRes => linux_v4l2_query_ctrl(v4l, cid).map(|q| q.step),
+                    UvcRequest::GetDef => linux_v4l2_query_ctrl(v4l, cid).map(|q| q.default_value),
+                    _ => Err(TransportError::Usb("unsupported V4L2 request".to_string())),
+                };
+                if let Ok(val) = v4l_val {
+                    return Ok(match actual_len {
+                        1 => vec![val as u8],
+                        2 => (val as i16).to_le_bytes().to_vec(),
+                        4 => val.to_le_bytes().to_vec(),
+                        _ => {
+                            let mut b = vec![0u8; actual_len];
+                            let le = val.to_le_bytes();
+                            let n = actual_len.min(4);
+                            b[..n].copy_from_slice(&le[..n]);
+                            b
+                        }
+                    });
+                }
             }
         }
 

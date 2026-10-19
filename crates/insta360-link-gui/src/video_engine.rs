@@ -198,10 +198,29 @@ impl VideoPreviewEngine {
 
         #[cfg(target_os = "linux")]
         {
-            for i in 0..10 {
+            for i in 0..16 {
                 let dev_path = format!("/dev/video{}", i);
-                if Path::new(&dev_path).exists() {
+                if !Path::new(&dev_path).exists() {
+                    continue;
+                }
+                let sys_dir = PathBuf::from(format!("/sys/class/video4linux/video{}", i));
+                // Skip secondary metadata V4L2 nodes (`index != 0`)
+                let idx = std::fs::read_to_string(sys_dir.join("index"))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if !idx.is_empty() && idx != "0" {
+                    continue;
+                }
+                let card_name = std::fs::read_to_string(sys_dir.join("name"))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if card_name.is_empty() {
                     self.available_devices.push(dev_path);
+                } else {
+                    self.available_devices
+                        .push(format!("[{}] {}", dev_path, card_name));
                 }
             }
         }
@@ -246,11 +265,14 @@ impl VideoPreviewEngine {
 
         let device_arg = if device_spec.starts_with('[') {
             if let Some(end) = device_spec.find(']') {
+                let bracketed = device_spec[1..end].trim();
                 let name = device_spec[end + 1..].trim();
-                if !name.is_empty() {
+                if bracketed.starts_with("/dev/") {
+                    bracketed.to_string()
+                } else if !name.is_empty() {
                     name.to_string()
                 } else {
-                    device_spec[1..end].to_string()
+                    bracketed.to_string()
                 }
             } else {
                 device_spec.to_string()
@@ -322,11 +344,24 @@ impl VideoPreviewEngine {
 
                 #[cfg(target_os = "linux")]
                 {
-                    let fps_str = fps.to_string();
-                    let out_size_arg = format!("{out_w}x{out_h}");
+                    let hw_fps = fps.min(30).to_string();
+                    let hw_size = match (out_w, out_h) {
+                        (3840, 2160) => "3840x2160",
+                        (1280, 720) => "1280x720",
+                        _ => "1920x1080",
+                    };
                     cmd.args(["-hide_banner", "-loglevel", "error", "-f", "v4l2"]);
                     if attempt == 0 {
-                        cmd.args(["-framerate", &fps_str, "-video_size", &out_size_arg]);
+                        cmd.args([
+                            "-input_format",
+                            "mjpeg",
+                            "-framerate",
+                            &hw_fps,
+                            "-video_size",
+                            hw_size,
+                        ]);
+                    } else {
+                        cmd.args(["-framerate", "30", "-video_size", "1280x720"]);
                     }
                     cmd.args([
                         "-i",
