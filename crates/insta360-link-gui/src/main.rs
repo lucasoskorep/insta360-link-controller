@@ -2104,10 +2104,8 @@ impl eframe::App for Insta360App {
                 );
 
                 // Start 1080p video recording test
-                let out_dir = std::path::Path::new(
-                    "/private/var/folders/xl/56c70fyj1f76mdtmtggl4szr0000gn/T/opencode",
-                );
-                if let Ok(rec_path) = self.video_engine.start_recording(out_dir) {
+                let out_dir = std::env::temp_dir();
+                if let Ok(rec_path) = self.video_engine.start_recording(&out_dir) {
                     println!(
                         "[GUI-SELF-TEST] Started 1920x1080 video recording to {}",
                         rec_path.display()
@@ -2115,9 +2113,7 @@ impl eframe::App for Insta360App {
                 }
             } else if self.self_test_step == 1 && elapsed >= 3.5 {
                 self.self_test_step = 2;
-                let out_dir = std::path::Path::new(
-                    "/private/var/folders/xl/56c70fyj1f76mdtmtggl4szr0000gn/T/opencode",
-                );
+                let out_dir = std::env::temp_dir();
                 if let Ok(rec_path) = self.video_engine.stop_recording() {
                     let size = std::fs::metadata(&rec_path).map(|m| m.len()).unwrap_or(0);
                     println!(
@@ -2126,7 +2122,7 @@ impl eframe::App for Insta360App {
                         size
                     );
                 }
-                if let Ok(snap_1080) = self.video_engine.save_screenshot(out_dir, &self.state) {
+                if let Ok(snap_1080) = self.video_engine.save_screenshot(&out_dir, &self.state) {
                     println!(
                         "[GUI-SELF-TEST] Saved 1920x1080 screenshot: {}",
                         snap_1080.display()
@@ -2263,10 +2259,8 @@ impl eframe::App for Insta360App {
                     self.state.pan_deg = p as f32 / 3600.0;
                     self.state.tilt_deg = t as f32 / 3600.0;
                 }
-                let out_dir = std::path::Path::new(
-                    "/private/var/folders/xl/56c70fyj1f76mdtmtggl4szr0000gn/T/opencode",
-                );
-                if let Ok(snap_720) = self.video_engine.save_screenshot(out_dir, &self.state) {
+                let out_dir = std::env::temp_dir();
+                if let Ok(snap_720) = self.video_engine.save_screenshot(&out_dir, &self.state) {
                     println!(
                         "[GUI-SELF-TEST] Saved 1280x720 screenshot: {}",
                         snap_720.display()
@@ -2307,12 +2301,8 @@ impl eframe::App for Insta360App {
                     self.state.pan_deg = p as f32 / 3600.0;
                     self.state.tilt_deg = t as f32 / 3600.0;
                 }
-                if let Ok(path) = self.video_engine.save_screenshot(
-                    std::path::Path::new(
-                        "/private/var/folders/xl/56c70fyj1f76mdtmtggl4szr0000gn/T/opencode",
-                    ),
-                    &self.state,
-                ) {
+                let out_dir = std::env::temp_dir();
+                if let Ok(path) = self.video_engine.save_screenshot(&out_dir, &self.state) {
                     println!(
                         "[GUI-SELF-TEST] Step 6: Restored pan={:.1} deg, tilt={:.1} deg; saved final live GUI video frame to {}",
                         self.state.pan_deg,
