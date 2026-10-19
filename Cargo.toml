@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/insta360-link-protocol",
+    "crates/insta360-link-cli",
+    "crates/insta360-link-gui",
+    "crates/insta360-link-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Insta360 Link Open Controller Contributors"]
+repository = "https://github.com/example/insta360-link-controller"
+
+[workspace.dependencies]
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bitflags = { version = "2.6", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+nusb = "0.1"
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.40", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
+eframe = "0.29"
+egui = "0.29"

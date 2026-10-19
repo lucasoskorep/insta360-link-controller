@@ -1,0 +1,166 @@
+# Insta360 Link Open Controller
+
+A pure-Rust, cross-platform (**Linux**, **Windows**, **macOS**) hardware controller suite for the **Insta360 Link**, **Insta360 Link 2**, **Insta360 Link 2C**, and **Insta360 Link 2 Pro (PUC3)** 4K AI webcams.
+
+Built by reverse-engineering the proprietary USB & UVC Extension Unit (`XU1` and `XU2`) protocol from the official Insta360 Link Controller desktop binary, this workspace provides full hardware control without proprietary drivers, telemetry, or OS lock-in—including first-class **Linux** support.
+
+📄 **Protocol Specification**: See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the complete byte-level UVC Extension Unit documentation.
+
+---
+
+## Workspace Crates
+
+| Crate / Binary | Description |
+| :--- | :--- |
+| **`insta360-link-protocol`** | Core Rust library implementing USB device discovery, UVC VideoControl descriptor parsing, standard UVC `CT_*`/`PU_*` controls, proprietary `XU1`/`XU2` codecs, `NusbTransport` (pure-Rust USB via `nusb`), and a stateful `MockCameraTransport` simulator. |
+| **`insta360-link-ctl`** (`insta360-link-cli`) | Command-line tool for scripting PTZ movement, presets, video modes (`Normal`, `AutoTracking`, `WhiteBoard`, `OverheadShot`, `DeskView`, `AutoFraming`, `SmartWhiteBoard`), exposure/ISO, white balance, audio beamforming modes, filters, and extended hardware switches. |
+| **`insta360-link-server`** | Asynchronous HTTP REST & WebSocket daemon (`axum` + `tokio`) for remote control, Stream Deck / OBS integration, and real-time state synchronization. |
+| **`insta360-link-gui`** | Native cross-platform desktop GUI (`egui` / `eframe`) featuring a virtual gimbal PTZ joystick, preset slots, AI mode switcher, image adjustment sliders, audio & filter controls, and built-in simulated camera mode. |
+
+---
+
+## Supported Hardware
+
+All cameras under Arashi Vision USB Vendor ID `0x2e1a`:
+
+| Model | USB `idVendor:idProduct` | Physical Gimbal | Supported Features |
+| :--- | :--- | :---: | :--- |
+| **Insta360 Link** (1st Gen) | `2e1a:4c01` | 3-Axis | PTZ, Roll, AI Tracking, Whiteboard, Overhead, DeskView, Gestures, HDR, Exposure Curve |
+| **Insta360 Link 2** | `2e1a:4c04` | 2-Axis | PTZ, AI Tracking, Auto Framing, Smart Whiteboard, DeskView, Overhead, Audio Modes, Filters, Templates, Horizon Leveling, Forbidden Areas |
+| **Insta360 Link 2C** | `2e1a:4c03` | Fixed (Digital Host PTZ) | Digital Host PTZ, Auto Framing, Smart Whiteboard, DeskView, Audio Modes, Filters, Templates, Privacy Mode |
+| **Insta360 Link 2 Pro (PUC3)** | `2e1a:4c02` / `4c05` / `4c06` | 2-Axis / Fixed | Full Link 2 / 2C feature set + Sound Wall (`AudioCaptureMode::SoundWall`) |
+
+---
+
+## Building from Source
+
+Requires Rust `1.78+` (no C/C++ `libusb` system dependency required—uses pure-Rust [`nusb`](https://docs.rs/nusb)):
+
+```bash
+cargo build --release
+```
+
+The compiled binaries will be placed in `target/release/`:
+- `target/release/insta360-link-ctl`
+- `target/release/insta360-link-server`
+- `target/release/insta360-link-gui`
+
+---
+
+## Platform Setup Instructions
+
+### Linux (`udev` Rules)
+
+On Linux, `nusb` communicates directly with the kernel `usbfs` device node (`/dev/bus/usb/BBB/DDD`) and detaches/claims only the UVC VideoControl interface while leaving the V4L2 video streaming interface (`/dev/video*`) untouched for OBS, Zoom, or browsers.
+
+To run the CLI, server, and GUI without `sudo`, install the bundled `udev` rules:
+
+```bash
+sudo cp udev/99-insta360-link.rules /etc/udev/rules.d/99-insta360-link.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+Unplug and reconnect your Insta360 Link camera if it is already connected.
+
+### Windows (`WinUSB` / Zadig Note)
+
+On Windows, the standard `usbvideo.sys` UVC driver claims the composite video interfaces. To allow direct USB control transfers via `nusb`:
+- Use [Zadig](https://zadig.akeo.ie/) (Options → **List All Devices**, uncheck **Ignore Hubs or Composite Parents**) to bind the camera's **UVC VideoControl interface (Interface 0)** to the **WinUSB** driver while leaving the VideoStreaming interface on `usbvideo.sys`, **or**
+- Run with `--mock` to test the CLI, server, and GUI using the built-in hardware simulator.
+
+### macOS
+
+On macOS, `nusb` uses `IOKit` to send UVC class-specific control requests directly to Endpoint 0 without detaching the macOS `UVCAssistant` / `AVFoundation` camera stream. No kernel extensions or extra permissions are required.
+
+---
+
+## Usage Examples
+
+### 1. Command-Line Interface (`insta360-link-ctl`)
+
+> **Tip**: Pass `--mock` (and optionally `--mock-model link2`, `link2c`, or `link`) to test any command against the simulated camera without physical hardware attached.
+
+```bash
+# List connected Insta360 Link cameras and discovered UVC unit IDs
+cargo run -p insta360-link-cli -- list
+
+# Show complete camera status, firmware version, PTZ angles, and active features
+cargo run -p insta360-link-cli -- status
+
+# Move gimbal to absolute pan/tilt angles (in degrees) and set zoom (100 = 1.0x, 200 = 2.0x)
+cargo run -p insta360-link-cli -- ptz --pan 15.0 --tilt -10.0 --zoom 150
+
+# Center / home the gimbal
+cargo run -p insta360-link-cli -- home
+
+# Save and recall gimbal preset slots (0..5)
+cargo run -p insta360-link-cli -- preset save 0
+cargo run -p insta360-link-cli -- preset recall 0
+
+# Switch AI Video Mode (normal, tracking, whiteboard, overhead, deskview, auto-framing, smart-whiteboard)
+cargo run -p insta360-link-cli -- mode tracking
+cargo run -p insta360-link-cli -- tracking --speed fast --composition half-body
+
+# Configure image settings (brightness, contrast, saturation, sharpness, white balance, HDR)
+cargo run -p insta360-link-cli -- image --brightness 60 --contrast 55 --hdr on --wb-kelvin 5600
+
+# Configure microphone beamforming mode (voice-focus, noise-suppression, music-balance, original, sound-wall)
+cargo run -p insta360-link-cli -- audio --mode voice-focus --denoise on
+```
+
+### 2. HTTP & WebSocket Server (`insta360-link-server`)
+
+Start the daemon on `127.0.0.1:8360` (use `--mock` if no physical camera is connected):
+
+```bash
+cargo run -p insta360-link-server -- --bind 127.0.0.1:8360 --mock
+```
+
+Example REST API calls:
+
+```bash
+# List discovered cameras
+curl http://127.0.0.1:8360/api/cameras
+
+# Fetch full camera state snapshot
+curl http://127.0.0.1:8360/api/state
+
+# Set PTZ pan, tilt, or zoom
+curl -X POST http://127.0.0.1:8360/api/ptz \
+  -H "Content-Type: application/json" \
+  -d '{"pan_deg": 20.0, "tilt_deg": -5.0, "zoom": 180}'
+
+# Switch video mode
+curl -X POST http://127.0.0.1:8360/api/mode \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "DeskView"}'
+```
+
+Connect to `ws://127.0.0.1:8360/ws` over WebSockets to receive real-time JSON state broadcasts and send low-latency PTZ/control commands.
+
+### 3. Desktop GUI (`insta360-link-gui`)
+
+Launch the native cross-platform GUI (automatically connects to a physical Insta360 Link camera if found, or falls back to the interactive simulator):
+
+```bash
+cargo run -p insta360-link-gui
+```
+
+---
+
+## Roadmap / TODO
+
+- [ ] **PTZ Gimbal Presets**: Save, recall, rename, and delete up to 6 hardware gimbal preset positions (`XU1 0x0e` / `0x11` & `0x1a`) with live thumbnail preview cards in the right sidebar.
+- [ ] **Privacy Mode / Sleep Mode**: Hardware privacy sleep toggle (`XU2 0x0f`) and Mute in Privacy Mode (`XU1 0x1b` `UltimatePrivacyMode` bit 11) with gimbal-down standby synchronization.
+- [ ] **Smart Composition**: AI Zoom (`XU1 0x1b` bit 0) and Head / Half Body / Whole Body / Custom composition framing (`XU1 0x13` & `0x18`) during AI Tracking.
+
+---
+
+## Protocol Documentation
+
+For full reverse-engineering details—including disassembly addresses from `Webcam-desktop` v2.0.2, mixed-endian UVC Extension Unit GUIDs, `XU1` and `XU2` selector tables, `ExtendFunction` bitmasks, and the USB firmware upgrade state machine—see **[`docs/PROTOCOL.md`](docs/PROTOCOL.md)**.
+
+## License
+
+Licensed under either of **MIT** or **Apache-2.0** at your option.

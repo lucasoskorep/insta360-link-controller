@@ -1,0 +1,20 @@
+[package]
+name = "insta360-link-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cross-platform pure-Rust desktop GUI controller for Insta360 Link, Link 2, and Link 2C"
+
+[[bin]]
+name = "insta360-link-gui"
+path = "src/main.rs"
+
+[dependencies]
+insta360-link-protocol = { path = "../insta360-link-protocol" }
+eframe.workspace = true
+egui.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

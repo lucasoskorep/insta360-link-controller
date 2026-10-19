@@ -1,0 +1,37 @@
+# Linux udev rules for Insta360 Link / Link 2 / Link 2C / Link 2 Pro (PUC3) webcams
+#
+# Grants non-root desktop users (via systemd-logind uaccess and plugdev/video groups)
+# direct read/write access to the USB device nodes so `insta360-link-ctl`,
+# `insta360-link-server`, and `insta360-link-gui` can issue UVC Extension Unit
+# control transfers without requiring `sudo`.
+#
+# Installation:
+#   sudo cp udev/99-insta360-link.rules /etc/udev/rules.d/99-insta360-link.rules
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+
+ACTION!="add|change", GOTO="insta360_link_end"
+SUBSYSTEM!="usb", GOTO="insta360_link_end"
+
+# Insta360 Link (1st Gen - 0x4c01)
+ATTRS{idVendor}=="2e1a", ATTRS{idProduct}=="4c01", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Insta360 Link 2 Pro / PUC3 Gimbal A (0x4c02)
+ATTRS{idVendor}=="2e1a", ATTRS{idProduct}=="4c02", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Insta360 Link 2C (Fixed-Lens 4K - 0x4c03)
+ATTRS{idVendor}=="2e1a", ATTRS{idProduct}=="4c03", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Insta360 Link 2 (2-Axis Gimbal 4K - 0x4c04)
+ATTRS{idVendor}=="2e1a", ATTRS{idProduct}=="4c04", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Insta360 Link 2C Pro / PUC3 Host (0x4c05)
+ATTRS{idVendor}=="2e1a", ATTRS{idProduct}=="4c05", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Insta360 Link 2 Pro / PUC3 Gimbal B (0x4c06)
+ATTRS{idVendor}=="2e1a", ATTRS{idProduct}=="4c06", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Insta360 Link Simple-Class / Firmware Upgrade Mode (0x00c2)
+ATTRS{idVendor}=="2e1a", ATTRS{idProduct}=="00c2", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+LABEL="insta360_link_end"
