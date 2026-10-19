@@ -1,0 +1,34 @@
+[tools]
+rust = "stable"
+
+[tasks.default]
+description = "Build and launch the Insta360 Link Controller desktop GUI"
+depends = ["gui"]
+
+[tasks.gui]
+description = "Build and launch the Insta360 Link Controller desktop GUI"
+run = "cargo run --release -p insta360-link-gui"
+
+[tasks.cli]
+description = "Run the insta360-link-ctl CLI (e.g. mise run cli -- info)"
+run = "cargo run --release -p insta360-link-cli --"
+
+[tasks.server]
+description = "Start the HTTP & WebSocket remote control server on 127.0.0.1:8360"
+run = "cargo run --release -p insta360-link-server --"
+
+[tasks.build]
+description = "Build all workspace crates in release mode"
+run = "cargo build --release --workspace"
+
+[tasks.test]
+description = "Run all workspace unit and integration tests"
+run = "cargo test --workspace"
+
+[tasks.self-test]
+description = "Run the automated live hardware GUI verification sequence"
+run = "INSTA360_GUI_SELF_TEST=1 cargo run --release -p insta360-link-gui"
+
+[tasks.udev-install]
+description = "Install Linux udev rules for non-root USB access to Insta360 Link webcams"
+run = "sudo cp udev/99-insta360-link.rules /etc/udev/rules.d/99-insta360-link.rules && sudo udevadm control --reload-rules && sudo udevadm trigger"

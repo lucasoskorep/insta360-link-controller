@@ -32,6 +32,29 @@ All cameras under Arashi Vision USB Vendor ID `0x2e1a`:
 
 ---
 
+## Quickstart with `mise`
+
+This project includes a [`mise.toml`](mise.toml) configuration that manages the Rust toolchain and exposes convenient task runners:
+
+```bash
+# Trust and install toolchain
+mise trust
+mise install
+
+# Install Linux udev rules (one-time setup on Linux for non-root USB access)
+mise run udev-install
+
+# Build & launch the desktop GUI
+mise run gui
+
+# Run the CLI (e.g., list cameras or inspect camera info)
+mise run cli -- list
+mise run cli -- info
+
+# Run automated live hardware GUI verification
+mise run self-test
+```
+
 ## Building from Source
 
 Requires Rust `1.78+` (no C/C++ `libusb` system dependency required—uses pure-Rust [`nusb`](https://docs.rs/nusb)):
