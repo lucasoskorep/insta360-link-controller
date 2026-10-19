@@ -560,103 +560,131 @@ fn render_effects_tab<T: UvcControlTransport>(
     }
 
     // ------------------------------------------------------------------------
-    // Card 3: `Makeup` (`ImageBeauty.qml`) (Link 2 / Link 2C only)
+    // Card 3: `Makeup` (`ImageBeauty.qml`)
     // ------------------------------------------------------------------------
-    if ctrl.model() != CameraModel::Link {
-        ui.add_space(10.0_f32);
-        ins_card(ui, theme, |ui| {
-            if ins_switch_row(ui, "Makeup & Retouch", None, &mut state.makeup_enabled, true, theme) {
-                // Toggled
-            }
-            if state.makeup_enabled {
-                ui.add_space(6.0_f32);
-                let mut makeup_val = state.makeup_intensity as i32;
-                if ins_slider_i32(ui, Some("Intensity"), &mut makeup_val, 0, 100, "%", true, theme) {
-                    state.makeup_intensity = makeup_val as u8;
-                }
-            }
-        });
-    }
-
-    // ------------------------------------------------------------------------
-    // Card 4: `Filter` (`ImageFilter.qml`) (Link 2 / Link 2C only)
-    // ------------------------------------------------------------------------
-    if ctrl.model() != CameraModel::Link {
-        ui.add_space(10.0_f32);
-        ins_card(ui, theme, |ui| {
-            ins_section_header(ui, "Filter", theme, None);
+    ui.add_space(10.0_f32);
+    ins_card(ui, theme, |ui| {
+        if ins_switch_row(ui, "Makeup & Retouch", None, &mut state.makeup_enabled, true, theme) {
+            // Toggled
+        }
+        if state.makeup_enabled {
             ui.add_space(6.0_f32);
+            let mut makeup_val = state.makeup_intensity as i32;
+            if ins_slider_i32(ui, Some("Intensity"), &mut makeup_val, 0, 100, "%", true, theme) {
+                state.makeup_intensity = makeup_val as u8;
+            }
+        }
+    });
 
-            const FILTERS: [(FilterMode, &str); 9] = [
-                (FilterMode::None, "None"),
-                (FilterMode::Style1, "Neon"),
-                (FilterMode::Style2, "Vintage1"),
-                (FilterMode::Amber, "Vintage2"),
-                (FilterMode::Film1, "Daylight"),
-                (FilterMode::Fresh, "Clear"),
-                (FilterMode::Film2, "Portrait"),
-                (FilterMode::Cool, "Cool"),
-                (FilterMode::Warm, "Warm"),
-            ];
+    // ------------------------------------------------------------------------
+    // Card 4: `Filter` (`ImageFilter.qml`)
+    // ------------------------------------------------------------------------
+    ui.add_space(10.0_f32);
+    ins_card(ui, theme, |ui| {
+        ins_section_header(ui, "Filter", theme, None);
+        ui.add_space(6.0_f32);
 
-            Grid::new("filter_tiles_grid")
-                .spacing([8.0_f32, 8.0_f32])
-                .show(ui, |ui| {
-                    let mut col = 0;
-                    for (mode, label) in FILTERS {
-                        let is_active = state.filter_mode == mode;
-                        let (rect, response) = ui.allocate_exact_size(Vec2::new(52.0_f32, 68.0_f32), Sense::click());
-                        let thumb_rect = Rect::from_min_size(rect.min, Vec2::new(52.0_f32, 50.0_f32));
+        const FILTERS: [(FilterMode, &str); 9] = [
+            (FilterMode::None, "None"),
+            (FilterMode::Style1, "Neon"),
+            (FilterMode::Style2, "Vintage1"),
+            (FilterMode::Amber, "Vintage2"),
+            (FilterMode::Film1, "Daylight"),
+            (FilterMode::Fresh, "Clear"),
+            (FilterMode::Film2, "Portrait"),
+            (FilterMode::Cool, "Cool"),
+            (FilterMode::Warm, "Warm"),
+        ];
 
-                        let stroke = if is_active {
-                            Stroke::new(2.0_f32, theme.brand_green)
-                        } else if response.hovered() {
-                            Stroke::new(1.0_f32, theme.text02)
+        Grid::new("filter_tiles_grid")
+            .spacing([8.0_f32, 8.0_f32])
+            .show(ui, |ui| {
+                let mut col = 0;
+                for (mode, label) in FILTERS {
+                    let is_active = state.filter_mode == mode;
+                    let (rect, response) =
+                        ui.allocate_exact_size(Vec2::new(52.0_f32, 68.0_f32), Sense::click());
+                    let thumb_rect = Rect::from_min_size(rect.min, Vec2::new(52.0_f32, 50.0_f32));
+
+                    let stroke = if is_active {
+                        Stroke::new(2.0_f32, theme.brand_green)
+                    } else if response.hovered() {
+                        Stroke::new(1.0_f32, theme.text02)
+                    } else {
+                        Stroke::new(1.0_f32, theme.border02)
+                    };
+
+                    let (c1, c2) = match mode {
+                        FilterMode::None => (
+                            Color32::from_rgb(80, 80, 80),
+                            Color32::from_rgb(60, 60, 60),
+                        ),
+                        FilterMode::Style1 => (
+                            Color32::from_rgb(255, 60, 180),
+                            Color32::from_rgb(0, 220, 255),
+                        ),
+                        FilterMode::Style2 => (
+                            Color32::from_rgb(210, 160, 100),
+                            Color32::from_rgb(140, 90, 50),
+                        ),
+                        FilterMode::Amber => (
+                            Color32::from_rgb(255, 170, 40),
+                            Color32::from_rgb(180, 90, 20),
+                        ),
+                        FilterMode::Film1 => (
+                            Color32::from_rgb(255, 230, 150),
+                            Color32::from_rgb(100, 180, 240),
+                        ),
+                        FilterMode::Fresh => (
+                            Color32::from_rgb(130, 230, 200),
+                            Color32::from_rgb(70, 160, 200),
+                        ),
+                        FilterMode::Film2 => (
+                            Color32::from_rgb(255, 190, 180),
+                            Color32::from_rgb(200, 130, 150),
+                        ),
+                        FilterMode::Cool => (
+                            Color32::from_rgb(80, 160, 255),
+                            Color32::from_rgb(40, 80, 180),
+                        ),
+                        FilterMode::Warm => (
+                            Color32::from_rgb(255, 140, 60),
+                            Color32::from_rgb(200, 70, 30),
+                        ),
+                    };
+
+                    ui.painter().rect_filled(thumb_rect, Rounding::same(6.0_f32), c1);
+                    let sub_rect = Rect::from_min_max(
+                        Pos2::new(thumb_rect.left(), thumb_rect.center().y),
+                        thumb_rect.max,
+                    );
+                    ui.painter().rect_filled(sub_rect, Rounding::same(6.0_f32), c2);
+                    ui.painter().rect_stroke(thumb_rect, Rounding::same(6.0_f32), stroke);
+
+                    ui.painter().text(
+                        Pos2::new(rect.center().x, rect.max.y - 8.0_f32),
+                        Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(10.5_f32),
+                        if is_active {
+                            theme.brand_green
                         } else {
-                            Stroke::new(1.0_f32, theme.border02)
-                        };
+                            theme.text02
+                        },
+                    );
 
-                        let (c1, c2) = match mode {
-                            FilterMode::None => (Color32::from_rgb(80, 80, 80), Color32::from_rgb(60, 60, 60)),
-                            FilterMode::Style1 => (Color32::from_rgb(255, 60, 180), Color32::from_rgb(0, 220, 255)),
-                            FilterMode::Style2 => (Color32::from_rgb(210, 160, 100), Color32::from_rgb(140, 90, 50)),
-                            FilterMode::Amber => (Color32::from_rgb(255, 170, 40), Color32::from_rgb(180, 90, 20)),
-                            FilterMode::Film1 => (Color32::from_rgb(255, 230, 150), Color32::from_rgb(100, 180, 240)),
-                            FilterMode::Fresh => (Color32::from_rgb(130, 230, 200), Color32::from_rgb(70, 160, 200)),
-                            FilterMode::Film2 => (Color32::from_rgb(255, 190, 180), Color32::from_rgb(200, 130, 150)),
-                            FilterMode::Cool => (Color32::from_rgb(80, 160, 255), Color32::from_rgb(40, 80, 180)),
-                            FilterMode::Warm => (Color32::from_rgb(255, 140, 60), Color32::from_rgb(200, 70, 30)),
-                        };
-
-                        ui.painter().rect_filled(thumb_rect, Rounding::same(6.0_f32), c1);
-                        let sub_rect = Rect::from_min_max(
-                            Pos2::new(thumb_rect.left(), thumb_rect.center().y),
-                            thumb_rect.max,
-                        );
-                        ui.painter().rect_filled(sub_rect, Rounding::same(6.0_f32), c2);
-                        ui.painter().rect_stroke(thumb_rect, Rounding::same(6.0_f32), stroke);
-
-                        ui.painter().text(
-                            Pos2::new(rect.center().x, rect.max.y - 8.0_f32),
-                            Align2::CENTER_CENTER,
-                            label,
-                            FontId::proportional(10.5_f32),
-                            if is_active { theme.brand_green } else { theme.text02 },
-                        );
-
-                        if response.clicked() {
-                            state.filter_mode = mode;
-                            let _ = ctrl.set_filter(mode);
-                        }
-
-                        col += 1;
-                        if col % 4 == 0 {
-                            ui.end_row();
-                        }
+                    if response.clicked() {
+                        state.filter_mode = mode;
+                        let _ = ctrl.set_filter(mode);
                     }
-                });
-        });
-    }
+
+                    col += 1;
+                    if col % 4 == 0 {
+                        ui.end_row();
+                    }
+                }
+            });
+    });
 }
 
 // ============================================================================
