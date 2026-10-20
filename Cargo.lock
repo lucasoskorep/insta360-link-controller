@@ -1831,7 +1831,7 @@ dependencies = [
 
 [[package]]
 name = "insta360-link-cli"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "clap",
  "insta360-link-protocol",
@@ -1843,7 +1843,7 @@ dependencies = [
 
 [[package]]
 name = "insta360-link-gui"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "eframe",
  "egui",
@@ -1857,7 +1857,7 @@ dependencies = [
 
 [[package]]
 name = "insta360-link-protocol"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "bitflags 2.13.2",
  "libc",
@@ -1870,7 +1870,7 @@ dependencies = [
 
 [[package]]
 name = "insta360-link-server"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "axum",
  "clap",

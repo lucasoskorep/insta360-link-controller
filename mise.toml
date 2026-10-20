@@ -32,3 +32,87 @@ run = "INSTA360_GUI_SELF_TEST=1 cargo run --release -p insta360-link-gui"
 [tasks.udev-install]
 description = "Install Linux udev rules for non-root USB access to Insta360 Link webcams"
 run = "sudo cp udev/99-insta360-link.rules /etc/udev/rules.d/99-insta360-link.rules && sudo udevadm control --reload-rules && sudo udevadm trigger"
+
+[tasks.package-release]
+description = "Build and package release binaries for a target (usage: mise run package-release [target] [version])"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+TARGET="${1:-$(rustc -vV | sed -n 's|host: ||p')}"
+VERSION="${2:-0.0.0}"
+VERSION="${VERSION#v}"
+
+case "$VERSION" in
+  0.*) ;;
+  *)
+    echo "Error: version must start with 0. (got: $VERSION)" >&2
+    exit 1
+    ;;
+esac
+
+python3 -c '
+import pathlib, re, sys
+ver = sys.argv[1]
+p = pathlib.Path("Cargo.toml")
+txt = p.read_text()
+txt = re.sub(r"(?m)^version\s*=\s*\"[^\"]+\"", f"version = \"{ver}\"", txt, count=1)
+p.write_text(txt)
+' "$VERSION"
+
+rustup target add "$TARGET" 2>/dev/null || true
+cargo build --release --workspace --target "$TARGET"
+
+case "$TARGET" in
+  x86_64-unknown-linux-gnu)   ASSET_SUFFIX="linux-x86_64"; EXT="tar.gz" ;;
+  aarch64-unknown-linux-gnu)  ASSET_SUFFIX="linux-arm64";  EXT="tar.gz" ;;
+  aarch64-apple-darwin)       ASSET_SUFFIX="macos-arm64";  EXT="tar.gz" ;;
+  x86_64-apple-darwin)        ASSET_SUFFIX="macos-x86_64"; EXT="tar.gz" ;;
+  x86_64-pc-windows-msvc|x86_64-pc-windows-gnu) ASSET_SUFFIX="windows-x86_64"; EXT="zip" ;;
+  *)                          ASSET_SUFFIX="$TARGET";      EXT="tar.gz" ;;
+esac
+
+STAGE_NAME="insta360-link-controller-v${VERSION}-${ASSET_SUFFIX}"
+STAGE_DIR="dist/${STAGE_NAME}"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+
+if [ "$EXT" = "zip" ]; then
+  cp "target/${TARGET}/release/insta360-link-gui.exe" "$STAGE_DIR/"
+  cp "target/${TARGET}/release/insta360-link-ctl.exe" "$STAGE_DIR/"
+  cp "target/${TARGET}/release/insta360-link-server.exe" "$STAGE_DIR/"
+  cp README.md "$STAGE_DIR/"
+  python3 -c '
+import pathlib, sys, zipfile
+stage_dir = pathlib.Path(sys.argv[1])
+out_zip = pathlib.Path(sys.argv[2])
+with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+    for f in stage_dir.rglob("*"):
+        if f.is_file():
+            zf.write(f, f.relative_to(stage_dir.parent))
+' "$STAGE_DIR" "dist/${STAGE_NAME}.zip"
+  echo "Packaged dist/${STAGE_NAME}.zip"
+else
+  cp "target/${TARGET}/release/insta360-link-gui" "$STAGE_DIR/"
+  cp "target/${TARGET}/release/insta360-link-ctl" "$STAGE_DIR/"
+  cp "target/${TARGET}/release/insta360-link-server" "$STAGE_DIR/"
+  cp README.md "$STAGE_DIR/"
+  cp -r udev "$STAGE_DIR/"
+  tar -C dist -czf "dist/${STAGE_NAME}.tar.gz" "$STAGE_NAME"
+  echo "Packaged dist/${STAGE_NAME}.tar.gz"
+fi
+rm -rf "$STAGE_DIR"
+'''
+
+[tasks.trigger-release]
+description = "Trigger the GitHub Actions release pipeline from master (usage: mise run trigger-release [0.1.0])"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+VER="${1:-0.1.0}"
+VER="${VER#v}"
+env -u GITHUB_TOKEN -u GH_TOKEN -u GITHUB_AUTH_TOKEN gh workflow run release.yml \
+  --repo lucasoskorep/insta360-link-controller \
+  --ref master \
+  -f version="$VER"
+echo "Triggered release workflow on master for v${VER}"
+'''
