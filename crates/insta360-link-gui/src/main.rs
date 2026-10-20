@@ -2393,12 +2393,62 @@ impl eframe::App for Insta360App {
     }
 }
 
+fn build_app_icon() -> egui::IconData {
+    let w = 64u32;
+    let h = 64u32;
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = ((y * w + x) * 4) as usize;
+            let dx = x as f32 - 31.5_f32;
+            let dy = y as f32 - 26.0_f32;
+            let dist = (dx * dx + dy * dy).sqrt();
+            // Dark rounded card background
+            let in_card = x >= 4 && x < 60 && y >= 4 && y < 60;
+            if !in_card {
+                continue;
+            }
+            let (mut r, mut g, mut b) = (20u8, 24u8, 32u8);
+            // Green camera ring
+            if (10.5_f32..=14.0_f32).contains(&dist) {
+                r = 0;
+                g = 230;
+                b = 118;
+            } else if dist < 5.0_f32 {
+                r = 0;
+                g = 230;
+                b = 118;
+            } else if dist < 10.5_f32 {
+                r = 12;
+                g = 15;
+                b = 20;
+            } else if (18..=46).contains(&x) && (44..=52).contains(&y) {
+                // Gimbal base
+                r = 43;
+                g = 50;
+                b = 66;
+            }
+            rgba[idx] = r;
+            rgba[idx + 1] = g;
+            rgba[idx + 2] = b;
+            rgba[idx + 3] = 255;
+        }
+    }
+    egui::IconData {
+        rgba,
+        width: w,
+        height: h,
+    }
+}
+
 fn main() -> eframe::Result<()> {
     tracing_subscriber::fmt::init();
 
     // Matching webcam.qml: width: 1440, height: 714, minimumWidth: 1120, minimumHeight: 536
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_app_id("insta360-link-controller")
+            .with_icon(build_app_icon())
             .with_inner_size([1440.0_f32, 714.0_f32])
             .with_min_inner_size([1120.0_f32, 536.0_f32])
             .with_title("Insta360 Link Controller"),

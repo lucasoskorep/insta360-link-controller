@@ -72,6 +72,12 @@ pub fn list_connected_cameras() -> Result<Vec<DiscoveredCamera>, TransportError>
                 unit_ids = parse_uvc_vc_descriptors(raw);
             }
         }
+        #[cfg(target_os = "linux")]
+        if unit_ids == UvcUnitIds::default() {
+            if let Some((_, parsed_ids)) = open_linux_v4l2_node(vid, pid, unit_ids.extension_unit_id) {
+                unit_ids = parsed_ids;
+            }
+        }
 
         out.push(DiscoveredCamera {
             vendor_id: vid,
@@ -89,10 +95,10 @@ pub fn list_connected_cameras() -> Result<Vec<DiscoveredCamera>, TransportError>
 }
 
 /// Pure-Rust cross-platform USB hardware transport backed by `nusb`
-/// (Linux `uvcvideo` `UVCIOC_CTRL_QUERY` + `usbfs`, Windows `WinUSB`, macOS `IOKit`).
+/// (Linux `uvcvideo` `UVCIOC_CTRL_QUERY` + V4L2 ioctls, Windows `WinUSB`, macOS `IOKit`).
 pub struct NusbTransport {
     info: DiscoveredCamera,
-    device: nusb::Device,
+    device: Option<nusb::Device>,
     interface: Option<nusb::Interface>,
     #[cfg(target_os = "linux")]
     v4l_file: Option<std::fs::File>,
@@ -100,7 +106,7 @@ pub struct NusbTransport {
 }
 
 #[cfg(target_os = "linux")]
-fn open_linux_v4l2_node(vid: u16, pid: u16, xu1_id: u8) -> Option<std::fs::File> {
+fn open_linux_v4l2_node(vid: u16, pid: u16, xu1_id: u8) -> Option<(std::fs::File, UvcUnitIds)> {
     let vid_hex = format!("{:04x}", vid);
     let pid_hex = format!("{:04x}", pid);
     let entries = std::fs::read_dir("/sys/class/video4linux").ok()?;
@@ -115,13 +121,13 @@ fn open_linux_v4l2_node(vid: u16, pid: u16, xu1_id: u8) -> Option<std::fs::File>
     }
     candidates.sort_by_key(|(num, _, _)| *num);
 
-    let mut fallback: Option<std::fs::File> = None;
+    let mut fallback: Option<(std::fs::File, UvcUnitIds)> = None;
     for (_, path, name) in candidates {
         let dev_link = path.join("device");
         let Ok(canon) = std::fs::canonicalize(&dev_link) else {
             continue;
         };
-        // Parent directory of the USB interface (`B-P:1.0`) holds `idVendor` and `idProduct`.
+        // Parent directory of the USB interface (`B-P:1.0`) holds `idVendor`, `idProduct`, and `descriptors`.
         if let Some(usb_dev_dir) = canon.parent() {
             let v = std::fs::read_to_string(usb_dev_dir.join("idVendor"))
                 .unwrap_or_default()
@@ -132,6 +138,23 @@ fn open_linux_v4l2_node(vid: u16, pid: u16, xu1_id: u8) -> Option<std::fs::File>
                 .trim()
                 .to_lowercase();
             if v == vid_hex && p == pid_hex {
+                let parsed_ids = std::fs::read(usb_dev_dir.join("descriptors"))
+                    .ok()
+                    .map(|raw| {
+                        // Skip the 18-byte USB Device Descriptor if present at offset 0
+                        let slice = if raw.len() > 18 && raw[0] == 18 && raw[1] == 1 {
+                            &raw[18..]
+                        } else {
+                            &raw[..]
+                        };
+                        parse_uvc_vc_descriptors(slice)
+                    })
+                    .unwrap_or_default();
+                let probe_xu1 = if parsed_ids.extension_unit_id != 0 {
+                    parsed_ids.extension_unit_id
+                } else {
+                    xu1_id
+                };
                 let dev_path = format!("/dev/{}", name);
                 if let Ok(file) = std::fs::OpenOptions::new()
                     .read(true)
@@ -143,17 +166,17 @@ fn open_linux_v4l2_node(vid: u16, pid: u16, xu1_id: u8) -> Option<std::fs::File>
                     let mut len_buf = [0u8; 2];
                     if linux_uvcioc_ctrl_query(
                         &file,
-                        xu1_id,
+                        probe_xu1,
                         0x03,
                         UvcRequest::GetLen as u8,
                         &mut len_buf,
                     )
                     .is_ok()
                     {
-                        return Some(file);
+                        return Some((file, parsed_ids));
                     }
                     if fallback.is_none() {
-                        fallback = Some(file);
+                        fallback = Some((file, parsed_ids));
                     }
                 }
             }
@@ -352,25 +375,49 @@ impl NusbTransport {
             })
             .ok_or(TransportError::DeviceNotFound)?;
 
-        let device = dev_info.open().map_err(|e| TransportError::Usb(e.to_string()))?;
-        if let Ok(cfg) = device.active_configuration() {
-            let raw: &[u8] = cfg.descriptors().as_bytes();
-            info.unit_ids = parse_uvc_vc_descriptors(raw);
+        let device = dev_info.open().ok();
+        if let Some(ref dev) = device {
+            if let Ok(cfg) = dev.active_configuration() {
+                let raw: &[u8] = cfg.descriptors().as_bytes();
+                info.unit_ids = parse_uvc_vc_descriptors(raw);
+            }
         }
 
         // Claim the UVC VideoControl interface without detaching the OS kernel UVC video streaming
         // driver (`uvcvideo` on Linux, `UVCAssistant` on macOS, `usbvideo.sys` on Windows) so that
         // live webcam video capture and UVC/XU control transfers operate simultaneously.
         let interface = device
-            .claim_interface(info.unit_ids.control_interface)
-            .ok();
+            .as_ref()
+            .and_then(|d| d.claim_interface(info.unit_ids.control_interface).ok());
 
         #[cfg(target_os = "linux")]
-        let v4l_file = open_linux_v4l2_node(
+        let v4l_file = match open_linux_v4l2_node(
             info.vendor_id,
             info.product_id,
             info.unit_ids.extension_unit_id,
-        );
+        ) {
+            Some((f, parsed_ids)) => {
+                if device.is_none() {
+                    info.unit_ids = parsed_ids;
+                }
+                Some(f)
+            }
+            None => None,
+        };
+
+        #[cfg(target_os = "linux")]
+        if device.is_none() && v4l_file.is_none() {
+            return Err(TransportError::Usb(
+                "Could not open V4L2 device node or USB device".to_string(),
+            ));
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        if device.is_none() {
+            return Err(TransportError::Usb(
+                "Could not open USB device".to_string(),
+            ));
+        }
 
         Ok(Self {
             info,
@@ -486,18 +533,15 @@ impl UvcControlTransport for NusbTransport {
                 .map_err(|e| TransportError::Usb(e.to_string()))
         } else {
             #[cfg(not(target_os = "windows"))]
-            {
-                self.device
+            if let Some(dev) = &self.device {
+                return dev
                     .control_out_blocking(control, payload, self.timeout)
                     .map(|_| ())
-                    .map_err(|e| TransportError::Usb(e.to_string()))
+                    .map_err(|e| TransportError::Usb(e.to_string()));
             }
-            #[cfg(target_os = "windows")]
-            {
-                Err(TransportError::Usb(
-                    "UVC control interface could not be claimed on Windows".to_string(),
-                ))
-            }
+            Err(TransportError::Usb(
+                "UVC control transfer failed".to_string(),
+            ))
         }
     }
 
@@ -590,17 +634,16 @@ impl UvcControlTransport for NusbTransport {
                 .map_err(|e| TransportError::Usb(e.to_string()))?
         } else {
             #[cfg(not(target_os = "windows"))]
-            {
-                self.device
+            if let Some(dev) = &self.device {
+                let n = dev
                     .control_in_blocking(control, &mut buf, self.timeout)
-                    .map_err(|e| TransportError::Usb(e.to_string()))?
+                    .map_err(|e| TransportError::Usb(e.to_string()))?;
+                buf.truncate(n);
+                return Ok(buf);
             }
-            #[cfg(target_os = "windows")]
-            {
-                return Err(TransportError::Usb(
-                    "UVC control interface could not be claimed on Windows".to_string(),
-                ));
-            }
+            return Err(TransportError::Usb(
+                "UVC control transfer failed".to_string(),
+            ));
         };
         buf.truncate(n);
         Ok(buf)

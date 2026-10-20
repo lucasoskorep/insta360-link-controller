@@ -41,9 +41,6 @@ This project includes a [`mise.toml`](mise.toml) configuration that manages the 
 mise trust
 mise install
 
-# Install Linux udev rules (one-time setup on Linux for non-root USB access)
-mise run udev-install
-
 # Build & launch the desktop GUI
 mise run gui
 
@@ -70,27 +67,17 @@ The compiled binaries will be placed in `target/release/`:
 
 ---
 
-## Platform Setup Instructions
+## Platform Notes
 
-### Linux (`udev` Rules)
+### Linux (`V4L2` & `uvcvideo`)
 
-On Linux, `nusb` communicates directly with the kernel `usbfs` device node (`/dev/bus/usb/BBB/DDD`) and detaches/claims only the UVC VideoControl interface while leaving the V4L2 video streaming interface (`/dev/video*`) untouched for OBS, Zoom, or browsers.
+On Linux, `insta360-link-protocol` communicates directly with the primary V4L2 video capture node (`/dev/video*`) using `UVCIOC_CTRL_QUERY` for proprietary Insta360 Extension Unit (`XU1`/`XU2`) commands and standard V4L2 `VIDIOC_G_CTRL`/`VIDIOC_S_CTRL` ioctls for Processing Unit / Camera Terminal controls, while reading USB descriptors from sysfs. Because `systemd-logind` automatically grants the active desktop user session access to `/dev/video*`, **no custom `udev` rules or `sudo` privileges are required**.
 
-To run the CLI, server, and GUI without `sudo`, install the bundled `udev` rules:
+#### Arch Linux (AUR)
 
 ```bash
-sudo cp udev/99-insta360-link.rules /etc/udev/rules.d/99-insta360-link.rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger
+yay -S insta360-link-controller-bin
 ```
-
-Unplug and reconnect your Insta360 Link camera if it is already connected.
-
-### Windows (`WinUSB` / Zadig Note)
-
-On Windows, the standard `usbvideo.sys` UVC driver claims the composite video interfaces. To allow direct USB control transfers via `nusb`:
-- Use [Zadig](https://zadig.akeo.ie/) (Options → **List All Devices**, uncheck **Ignore Hubs or Composite Parents**) to bind the camera's **UVC VideoControl interface (Interface 0)** to the **WinUSB** driver while leaving the VideoStreaming interface on `usbvideo.sys`, **or**
-- Run with `--mock` to test the CLI, server, and GUI using the built-in hardware simulator.
 
 ### macOS
 
