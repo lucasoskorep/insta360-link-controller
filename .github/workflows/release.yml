@@ -59,9 +59,6 @@ jobs:
           - label: macos-x86_64
             os: macos-14
             target: x86_64-apple-darwin
-          - label: windows-x86_64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
 
     steps:
       - name: Checkout repository
