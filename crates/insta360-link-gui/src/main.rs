@@ -2099,25 +2099,13 @@ impl eframe::App for Insta360App {
             if should_sync {
                 self.state.last_hw_sync = Some(Instant::now());
                 if !self.state.ready_auto_track {
-                    match self.controller.get_video_mode() {
-                        Ok((hw_mode, _)) => {
-                            if hw_mode != self.state.video_mode {
-                                self.state.video_mode = hw_mode;
-                                if hw_mode == VideoMode::Normal {
-                                    self.state.tracked_targets.clear();
-                                }
+                    if let Ok((hw_mode, _)) = self.controller.get_video_mode() {
+                        if hw_mode != self.state.video_mode {
+                            self.state.video_mode = hw_mode;
+                            if hw_mode == VideoMode::Normal {
+                                self.state.tracked_targets.clear();
                             }
                         }
-                        Err(_) if self.state.video_mode == VideoMode::AutoTracking => {
-                            // Firmware reported 0xff (target lock incomplete); re-enable 200ms target lock loop
-                            let _ = self.controller.set_video_mode_raw(
-                                VideoMode::Normal,
-                                &VideoModeAuxData::default(),
-                            );
-                            self.state.ready_auto_track = true;
-                            self.state.last_track_poll = Some(Instant::now());
-                        }
-                        Err(_) => {}
                     }
                 }
                 if self.state.video_mode == VideoMode::Normal && !self.state.ready_auto_track {
@@ -2311,8 +2299,11 @@ impl eframe::App for Insta360App {
                 );
                 self.state.ui_mode = UiMode::Toolbar;
                 self.set_video_mode(VideoMode::AutoTracking);
-            } else if self.self_test_step == 3 && elapsed >= 8.2 {
+            } else if self.self_test_step == 3
+                && ((!self.state.ready_auto_track && elapsed >= 7.0) || elapsed >= 10.5)
+            {
                 self.self_test_step = 4;
+                std::thread::sleep(Duration::from_millis(500));
                 self.state.ui_mode = UiMode::MainWindow;
                 let hw_mode = self.controller.get_video_mode().ok().map(|m| m.0);
                 println!(
@@ -2320,7 +2311,7 @@ impl eframe::App for Insta360App {
                     self.state.video_mode, hw_mode
                 );
                 self.set_video_mode(VideoMode::DeskView);
-            } else if self.self_test_step == 4 && elapsed >= 10.2 {
+            } else if self.self_test_step == 4 && elapsed >= 12.5 {
                 self.self_test_step = 5;
                 let hw_mode = self.controller.get_video_mode().ok().map(|m| m.0);
                 println!(
@@ -2328,7 +2319,7 @@ impl eframe::App for Insta360App {
                     hw_mode
                 );
                 self.set_video_mode(VideoMode::Normal);
-            } else if self.self_test_step == 5 && elapsed >= 12.5 {
+            } else if self.self_test_step == 5 && elapsed >= 15.0 {
                 self.self_test_step = 6;
                 if let Ok((p, t)) = self.controller.get_pantilt_absolute() {
                     self.state.pan_deg = p as f32 / 3600.0;
