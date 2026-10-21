@@ -2114,16 +2114,19 @@ impl eframe::App for Insta360App {
         if self.self_test_enabled && self.state.stream_initialized {
             let start = *self.self_test_start.get_or_insert_with(Instant::now);
             let elapsed = start.elapsed().as_secs_f32();
-            if self.self_test_step == 0 && elapsed >= 1.8 {
+            if self.self_test_step == 0 && elapsed >= 3.2 {
                 self.self_test_step = 1;
-                self.state.pan_deg = 70.0;
-                self.state.tilt_deg = 0.0;
-                let _ = self.controller.set_pantilt_absolute(252_000, 0);
+                if let Ok((p, t)) = self.controller.get_pantilt_absolute() {
+                    self.state.pan_deg = p as f32 / 3600.0;
+                    self.state.tilt_deg = t as f32 / 3600.0;
+                }
                 println!(
-                    "[GUI-SELF-TEST] Step 1: Stream initialized, device='{}', fw='{}', mode={:?}",
+                    "[GUI-SELF-TEST] Step 1: Stream initialized, device='{}', fw='{}', mode={:?}, pan={:.1}, tilt={:.1}",
                     self.state.device_info.device_name,
                     self.state.device_info.firmware_version,
-                    self.state.video_mode
+                    self.state.video_mode,
+                    self.state.pan_deg,
+                    self.state.tilt_deg
                 );
 
                 // Start 1080p video recording test
@@ -2134,7 +2137,7 @@ impl eframe::App for Insta360App {
                         rec_path.display()
                     );
                 }
-            } else if self.self_test_step == 1 && elapsed >= 3.5 {
+            } else if self.self_test_step == 1 && elapsed >= 4.8 {
                 self.self_test_step = 2;
                 let out_dir = std::env::temp_dir();
                 if let Ok(rec_path) = self.video_engine.stop_recording() {
@@ -2264,17 +2267,13 @@ impl eframe::App for Insta360App {
                     "[GUI-SELF-TEST] Hardware Settings Verified:\n  zoom={z_read}, track_speed=({ts_fast:?} -> {ts_norm:?})\n  AE=({ae_off} -> {ae_on}), EV=({ev_15:.1} -> {ev_0:.1}), ISO={iso_400}, Shutter=1/{sh_120}s\n  AF=({af_off} -> {af_on}), Focus={f_60}, AWB=({awb_off} -> {awb_on}), WB={wb_4200}K\n  Bright={br_65}, Contrast={ct_65}, Sat={sat_65}, Sharp={sh_65}\n  AntiFlicker=({pl_50:?} -> {pl_60:?}), HDR=({hdr_on:?} -> {hdr_off:?})\n  HFlip={hmir_on:?}, VFlip={vmir_on:?}, AudioDenoise=({nr_off:?} -> {nr_on:?}), Gestures={gest:?}"
                 );
 
-                // Switch resolution to 1280x720 to test live resolution switching
-                self.state.format_preset = VideoFormatPreset::Hd720p30;
-                self.video_engine.set_capture_format(1280, 720, 30);
-
                 println!(
-                    "[GUI-SELF-TEST] Step 2: Starting smooth joystick velocity pan(speed=4, dir=1) from pan={:.1} deg, tilt={:.1} deg",
+                    "[GUI-SELF-TEST] Step 2: Starting smooth joystick velocity pan(speed=3, dir=1) from pan={:.1} deg, tilt={:.1} deg",
                     self.state.pan_deg, self.state.tilt_deg
                 );
-                let _ = self.controller.set_pantilt_relative_ext(4, 1, 0, 0);
-                self.state.last_ptz_cmd = (4, 1, 0, 0);
-            } else if self.self_test_step == 2 && elapsed >= 5.2 {
+                let _ = self.controller.set_pantilt_relative_ext(3, 1, 0, 0);
+                self.state.last_ptz_cmd = (3, 1, 0, 0);
+            } else if self.self_test_step == 2 && elapsed >= 5.5 {
                 self.self_test_step = 3;
                 let _ = self.controller.stop_pantilt_relative();
                 self.state.last_ptz_cmd = (0, 0, 0, 0);
@@ -2282,43 +2281,34 @@ impl eframe::App for Insta360App {
                     self.state.pan_deg = p as f32 / 3600.0;
                     self.state.tilt_deg = t as f32 / 3600.0;
                 }
-                let out_dir = std::env::temp_dir();
-                if let Ok(snap_720) = self.video_engine.save_screenshot(&out_dir, &self.state) {
-                    println!(
-                        "[GUI-SELF-TEST] Saved 1280x720 screenshot: {}",
-                        snap_720.display()
-                    );
-                }
-                // Restore 1920x1080
-                self.state.format_preset = VideoFormatPreset::Fhd1080p30;
-                self.video_engine.set_capture_format(1920, 1080, 30);
+                // Center back to (0, -12 deg) so the person in front of the desk is in frame
+                let _ = self.controller.set_pantilt_absolute(0, -43_200);
+                self.state.pan_deg = 0.0;
+                self.state.tilt_deg = -12.0;
 
                 println!(
-                    "[GUI-SELF-TEST] Step 3: Stopped joystick velocity, new pan={:.1} deg, tilt={:.1} deg; testing Toolbar Mode & activating AI Tracking",
-                    self.state.pan_deg, self.state.tilt_deg
+                    "[GUI-SELF-TEST] Step 3: Stopped joystick velocity; testing Toolbar Mode & activating AI Tracking"
                 );
                 self.state.ui_mode = UiMode::Toolbar;
                 self.set_video_mode(VideoMode::AutoTracking);
-            } else if self.self_test_step == 3 && elapsed >= 6.8 {
+            } else if self.self_test_step == 3 && elapsed >= 8.2 {
                 self.self_test_step = 4;
                 self.state.ui_mode = UiMode::MainWindow;
                 let hw_mode = self.controller.get_video_mode().ok().map(|m| m.0);
-                self.state.pan_deg = 70.0;
-                self.state.tilt_deg = 0.0;
                 println!(
                     "[GUI-SELF-TEST] Step 4: AI Tracking active (ui_mode={:?}, hw_mode={:?}); switching to DeskView",
                     self.state.video_mode, hw_mode
                 );
                 self.set_video_mode(VideoMode::DeskView);
-            } else if self.self_test_step == 4 && elapsed >= 8.8 {
+            } else if self.self_test_step == 4 && elapsed >= 10.2 {
                 self.self_test_step = 5;
                 let hw_mode = self.controller.get_video_mode().ok().map(|m| m.0);
                 println!(
-                    "[GUI-SELF-TEST] Step 5: DeskView active (hw_mode={:?}); restoring Normal mode and (pan=70 deg, tilt=0 deg)",
+                    "[GUI-SELF-TEST] Step 5: DeskView active (hw_mode={:?}); restoring Normal mode",
                     hw_mode
                 );
                 self.set_video_mode(VideoMode::Normal);
-            } else if self.self_test_step == 5 && elapsed >= 11.5 {
+            } else if self.self_test_step == 5 && elapsed >= 12.5 {
                 self.self_test_step = 6;
                 if let Ok((p, t)) = self.controller.get_pantilt_absolute() {
                     self.state.pan_deg = p as f32 / 3600.0;
