@@ -139,6 +139,11 @@ impl VideoPreviewEngine {
         (self.capture_width, self.capture_height)
     }
 
+    /// Returns the currently configured capture frame rate (`fps`).
+    pub fn capture_fps(&self) -> u32 {
+        self.capture_fps
+    }
+
     /// List of discovered hardware capture devices.
     pub fn available_capture_devices(&self) -> &[String] {
         &self.available_devices
@@ -301,21 +306,32 @@ impl VideoPreviewEngine {
             let frame_size = out_w * out_h * 3;
             let mut buffer = vec![0u8; frame_size];
 
-            for attempt in 0..2 {
+            for attempt in 0..8 {
                 if stop_flag.load(Ordering::Relaxed) {
                     break;
+                }
+                if attempt > 0 {
+                    std::thread::sleep( std::time::Duration::from_millis(400));
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
                 }
                 let mut cmd = Command::new("ffmpeg");
 
                 #[cfg(target_os = "macos")]
                 {
-                    // Insta360 Link AVFoundation natively supports 3840x2160, 1920x1080, 1280x720 at up to 30fps
+                    // Insta360 Link AVFoundation natively supports 3840x2160, 1920x1080, 1280x720, 1080x1920
                     // in '420v' (nv12) and '2vuy' (uyvy422). Using nv12 matches both the official
                     // Insta360 Link Controller (`OpenDevice` at 0x10008770c) and Chrome/Google Meet.
-                    let hw_fps = fps.min(30).to_string();
+                    let hw_fps = if attempt < 6 {
+                        fps.to_string()
+                    } else {
+                        fps.min(30).to_string()
+                    };
                     let hw_size = match (out_w, out_h) {
                         (3840, 2160) => "3840x2160",
                         (1280, 720) => "1280x720",
+                        (1080, 1920) if attempt < 6 => "1080x1920",
                         _ => "1920x1080",
                     };
                     cmd.args([
@@ -327,7 +343,7 @@ impl VideoPreviewEngine {
                         "-pixel_format",
                         "nv12",
                     ]);
-                    if attempt == 0 {
+                    if attempt < 7 {
                         cmd.args(["-framerate", &hw_fps, "-video_size", hw_size]);
                     } else {
                         cmd.args(["-framerate", "30", "-video_size", "1280x720"]);
@@ -351,14 +367,19 @@ impl VideoPreviewEngine {
 
                 #[cfg(target_os = "linux")]
                 {
-                    let hw_fps = fps.min(30).to_string();
+                    let hw_fps = if attempt < 6 {
+                        fps.to_string()
+                    } else {
+                        fps.min(30).to_string()
+                    };
                     let hw_size = match (out_w, out_h) {
                         (3840, 2160) => "3840x2160",
                         (1280, 720) => "1280x720",
+                        (1080, 1920) if attempt < 6 => "1080x1920",
                         _ => "1920x1080",
                     };
                     cmd.args(["-hide_banner", "-loglevel", "error", "-f", "v4l2"]);
-                    if attempt == 0 {
+                    if attempt < 7 {
                         cmd.args([
                             "-input_format",
                             "mjpeg",
@@ -543,13 +564,14 @@ impl VideoPreviewEngine {
                 }
             }
         } else {
+            let is_vert = state.format_preset.is_vertical();
             let (out_w, out_h) = if state.low_resolution_mode {
-                if state.vertical_resolution_mode {
+                if is_vert {
                     (270, 480)
                 } else {
                     (480, 270)
                 }
-            } else if state.vertical_resolution_mode {
+            } else if is_vert {
                 (360, 640)
             } else {
                 (640, 360)
@@ -1110,7 +1132,7 @@ impl VideoPreviewEngine {
 
         let w = self.capture_width;
         let h = self.capture_height;
-        let fps = self.capture_fps.min(30).max(15);
+        let fps = self.capture_fps.clamp(15, 60);
         let size_arg = format!("{w}x{h}");
         let fps_arg = fps.to_string();
 

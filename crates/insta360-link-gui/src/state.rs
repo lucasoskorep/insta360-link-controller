@@ -651,7 +651,8 @@ impl CameraAppState {
         self.smart_adjustment = p.smart_adjustment;
         self.horizontal_correction = p.horizontal_correction;
         self.roll_deg = p.roll_deg.clamp(-1.0, 1.0);
-        self.vertical_resolution_mode = p.vertical_resolution_mode;
+        self.vertical_resolution_mode =
+            p.vertical_resolution_mode || p.format_preset.fps() > 30 || p.format_preset.is_vertical();
         self.forced_vertical_lock = p.forced_vertical_lock;
         self.low_resolution_mode = p.low_resolution_mode;
     }

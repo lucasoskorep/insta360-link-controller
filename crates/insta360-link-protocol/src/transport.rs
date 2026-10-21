@@ -101,7 +101,7 @@ pub struct NusbTransport {
     device: Option<nusb::Device>,
     interface: Option<nusb::Interface>,
     #[cfg(target_os = "linux")]
-    v4l_file: Option<std::fs::File>,
+    v4l_file: std::sync::Mutex<Option<std::fs::File>>,
     timeout: Duration,
 }
 
@@ -424,9 +424,34 @@ impl NusbTransport {
             device,
             interface,
             #[cfg(target_os = "linux")]
-            v4l_file,
+            v4l_file: std::sync::Mutex::new(v4l_file),
             timeout: Duration::from_millis(1500),
         })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn with_v4l_file<R, F>(&self, mut op: F) -> Option<R>
+    where
+        F: FnMut(&std::fs::File) -> Result<R, TransportError>,
+    {
+        let mut guard = self.v4l_file.lock().ok()?;
+        if let Some(ref f) = *guard {
+            if let Ok(res) = op(f) {
+                return Some(res);
+            }
+        }
+        // Re-open V4L2 node if the camera re-enumerated over USB (e.g., when switching
+        // VerticalMode / High Frame Rate UVC descriptors).
+        if let Some((new_f, _)) = open_linux_v4l2_node(
+            self.info.vendor_id,
+            self.info.product_id,
+            self.info.unit_ids.extension_unit_id,
+        ) {
+            let res = op(&new_f).ok();
+            *guard = Some(new_f);
+            return res;
+        }
+        None
     }
 }
 
@@ -462,55 +487,55 @@ impl UvcControlTransport for NusbTransport {
         };
 
         #[cfg(target_os = "linux")]
-        if let Some(v4l) = &self.v4l_file {
-            if is_xu {
-                let mut buf = payload.to_vec();
-                if linux_uvcioc_ctrl_query(
-                    v4l,
-                    unit_id,
-                    selector,
-                    UvcRequest::SetCur as u8,
-                    &mut buf,
-                )
-                .is_ok()
+        if self
+            .with_v4l_file(|v4l| {
+                if is_xu {
+                    let mut buf = payload.to_vec();
+                    linux_uvcioc_ctrl_query(
+                        v4l,
+                        unit_id,
+                        selector,
+                        UvcRequest::SetCur as u8,
+                        &mut buf,
+                    )
+                } else if unit_id == self.info.unit_ids.input_terminal_id
+                    && selector == ct_selectors::PANTILT_ABSOLUTE
+                    && payload.len() >= 8
                 {
-                    return Ok(());
-                }
-            } else if unit_id == self.info.unit_ids.input_terminal_id
-                && selector == ct_selectors::PANTILT_ABSOLUTE
-                && payload.len() >= 8
-            {
-                let pan = i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                let tilt = i32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
-                let r1 = linux_v4l2_set_ctrl(v4l, V4L2_CID_PAN_ABSOLUTE, pan);
-                let r2 = linux_v4l2_set_ctrl(v4l, V4L2_CID_TILT_ABSOLUTE, tilt);
-                if r1.is_ok() || r2.is_ok() {
-                    return Ok(());
-                }
-            } else if let Some(cid) =
-                linux_uvc_to_v4l2_cid(&self.info.unit_ids, unit_id, selector)
-            {
-                let val: i32 = match payload.len() {
-                    1 => payload[0] as i32,
-                    2 => {
-                        if cid == V4L2_CID_BRIGHTNESS {
-                            i16::from_le_bytes([payload[0], payload[1]]) as i32
-                        } else {
-                            u16::from_le_bytes([payload[0], payload[1]]) as i32
+                    let pan = i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                    let tilt = i32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                    let r1 = linux_v4l2_set_ctrl(v4l, V4L2_CID_PAN_ABSOLUTE, pan);
+                    let r2 = linux_v4l2_set_ctrl(v4l, V4L2_CID_TILT_ABSOLUTE, tilt);
+                    r1.or(r2)
+                } else if let Some(cid) =
+                    linux_uvc_to_v4l2_cid(&self.info.unit_ids, unit_id, selector)
+                {
+                    let val: i32 = match payload.len() {
+                        1 => payload[0] as i32,
+                        2 => {
+                            if cid == V4L2_CID_BRIGHTNESS {
+                                i16::from_le_bytes([payload[0], payload[1]]) as i32
+                            } else {
+                                u16::from_le_bytes([payload[0], payload[1]]) as i32
+                            }
                         }
-                    }
-                    4 => i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]),
-                    _ => 0,
-                };
-                if linux_v4l2_set_ctrl(v4l, cid, val).is_ok() {
-                    return Ok(());
-                }
-                if cid == V4L2_CID_POWER_LINE_FREQUENCY && val == 3 {
-                    if linux_v4l2_set_ctrl(v4l, cid, 2).is_ok() {
+                        4 => i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]),
+                        _ => 0,
+                    };
+                    if linux_v4l2_set_ctrl(v4l, cid, val).is_ok() {
                         return Ok(());
                     }
+                    if cid == V4L2_CID_POWER_LINE_FREQUENCY && val == 3 {
+                        return linux_v4l2_set_ctrl(v4l, cid, 2);
+                    }
+                    Err(TransportError::Usb("V4L2 set_ctrl failed".to_string()))
+                } else {
+                    Err(TransportError::Usb("unmapped V4L2 control".to_string()))
                 }
-            }
+            })
+            .is_some()
+        {
+            return Ok(());
         }
 
         let hdr = UvcControlPacketHeader::new(
@@ -567,51 +592,49 @@ impl UvcControlTransport for NusbTransport {
         };
 
         #[cfg(target_os = "linux")]
-        if let Some(v4l) = &self.v4l_file {
+        if let Some(out) = self.with_v4l_file(|v4l| {
             if is_xu {
                 let mut buf = vec![0u8; actual_len];
-                if linux_uvcioc_ctrl_query(v4l, unit_id, selector, req as u8, &mut buf).is_ok() {
-                    return Ok(buf);
-                }
+                linux_uvcioc_ctrl_query(v4l, unit_id, selector, req as u8, &mut buf)?;
+                Ok(buf)
             } else if unit_id == self.info.unit_ids.input_terminal_id
                 && selector == ct_selectors::PANTILT_ABSOLUTE
                 && req == UvcRequest::GetCur
             {
-                if let (Ok(pan), Ok(tilt)) = (
-                    linux_v4l2_get_ctrl(v4l, V4L2_CID_PAN_ABSOLUTE),
-                    linux_v4l2_get_ctrl(v4l, V4L2_CID_TILT_ABSOLUTE),
-                ) {
-                    let mut out = vec![0u8; 8];
-                    out[0..4].copy_from_slice(&pan.to_le_bytes());
-                    out[4..8].copy_from_slice(&tilt.to_le_bytes());
-                    return Ok(out);
-                }
+                let pan = linux_v4l2_get_ctrl(v4l, V4L2_CID_PAN_ABSOLUTE)?;
+                let tilt = linux_v4l2_get_ctrl(v4l, V4L2_CID_TILT_ABSOLUTE)?;
+                let mut out = vec![0u8; 8];
+                out[0..4].copy_from_slice(&pan.to_le_bytes());
+                out[4..8].copy_from_slice(&tilt.to_le_bytes());
+                Ok(out)
             } else if let Some(cid) =
                 linux_uvc_to_v4l2_cid(&self.info.unit_ids, unit_id, selector)
             {
-                let v4l_val: Result<i32, TransportError> = match req {
-                    UvcRequest::GetCur => linux_v4l2_get_ctrl(v4l, cid),
-                    UvcRequest::GetMin => linux_v4l2_query_ctrl(v4l, cid).map(|q| q.minimum),
-                    UvcRequest::GetMax => linux_v4l2_query_ctrl(v4l, cid).map(|q| q.maximum),
-                    UvcRequest::GetRes => linux_v4l2_query_ctrl(v4l, cid).map(|q| q.step),
-                    UvcRequest::GetDef => linux_v4l2_query_ctrl(v4l, cid).map(|q| q.default_value),
-                    _ => Err(TransportError::Usb("unsupported V4L2 request".to_string())),
+                let val: i32 = match req {
+                    UvcRequest::GetCur => linux_v4l2_get_ctrl(v4l, cid)?,
+                    UvcRequest::GetMin => linux_v4l2_query_ctrl(v4l, cid)?.minimum,
+                    UvcRequest::GetMax => linux_v4l2_query_ctrl(v4l, cid)?.maximum,
+                    UvcRequest::GetRes => linux_v4l2_query_ctrl(v4l, cid)?.step,
+                    UvcRequest::GetDef => linux_v4l2_query_ctrl(v4l, cid)?.default_value,
+                    _ => return Err(TransportError::Usb("unsupported V4L2 request".to_string())),
                 };
-                if let Ok(val) = v4l_val {
-                    return Ok(match actual_len {
-                        1 => vec![val as u8],
-                        2 => (val as i16).to_le_bytes().to_vec(),
-                        4 => val.to_le_bytes().to_vec(),
-                        _ => {
-                            let mut b = vec![0u8; actual_len];
-                            let le = val.to_le_bytes();
-                            let n = actual_len.min(4);
-                            b[..n].copy_from_slice(&le[..n]);
-                            b
-                        }
-                    });
-                }
+                Ok(match actual_len {
+                    1 => vec![val as u8],
+                    2 => (val as i16).to_le_bytes().to_vec(),
+                    4 => val.to_le_bytes().to_vec(),
+                    _ => {
+                        let mut b = vec![0u8; actual_len];
+                        let le = val.to_le_bytes();
+                        let n = actual_len.min(4);
+                        b[..n].copy_from_slice(&le[..n]);
+                        b
+                    }
+                })
+            } else {
+                Err(TransportError::Usb("unmapped V4L2 control".to_string()))
             }
+        }) {
+            return Ok(out);
         }
 
         let hdr = UvcControlPacketHeader::new(

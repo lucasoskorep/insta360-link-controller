@@ -86,6 +86,12 @@ impl Insta360App {
     fn auto_select_insta360_video_feed(&mut self) {
         let (w, h) = self.state.format_preset.dimensions();
         let fps = self.state.format_preset.fps();
+        if (fps > 30 || self.state.format_preset.is_vertical())
+            && !self.state.vertical_resolution_mode
+        {
+            self.state.vertical_resolution_mode = true;
+            let _ = self.controller.set_vertical_screen(true);
+        }
         self.video_engine
             .set_capture_format(w as usize, h as usize, fps);
 
@@ -604,7 +610,13 @@ impl Insta360App {
                         {
                             let (w, h) = preset.dimensions();
                             let fps = preset.fps();
-                            self.state.vertical_resolution_mode = preset.is_vertical();
+                            if (fps > 30 || preset.is_vertical())
+                                && !self.state.vertical_resolution_mode
+                            {
+                                self.video_engine.stop_physical_capture();
+                                self.state.vertical_resolution_mode = true;
+                                let _ = self.controller.set_vertical_screen(true);
+                            }
                             self.state.low_resolution_mode = w == 640;
                             self.video_engine.set_capture_format(w as usize, h as usize, fps);
                             self.state
@@ -840,7 +852,7 @@ impl Insta360App {
         }
 
         // Live video feed rendering with aspect ratio preservation
-        let target_aspect = if self.state.vertical_resolution_mode {
+        let target_aspect = if self.state.format_preset.is_vertical() {
             9.0_f32 / 16.0_f32
         } else {
             16.0_f32 / 9.0_f32
@@ -2085,17 +2097,31 @@ impl Insta360App {
 
 impl eframe::App for Insta360App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Continuous repaint loop for smooth 30fps live video preview
-        if self.state.preview_open {
-            ctx.request_repaint_after(Duration::from_millis(33));
-        }
-
-        // Keep capture resolution synced with selected format preset
+        // Keep capture resolution and frame rate synced with selected format preset
         let (target_w, target_h) = self.state.format_preset.dimensions();
         let target_fps = self.state.format_preset.fps();
-        if self.video_engine.capture_dimensions() != (target_w as usize, target_h as usize) {
+        if self.video_engine.capture_dimensions() != (target_w as usize, target_h as usize)
+            || self.video_engine.capture_fps() != target_fps
+        {
+            if (target_fps > 30 || self.state.format_preset.is_vertical())
+                && !self.state.vertical_resolution_mode
+            {
+                self.video_engine.stop_physical_capture();
+                self.state.vertical_resolution_mode = true;
+                let _ = self.controller.set_vertical_screen(true);
+            }
             self.video_engine
                 .set_capture_format(target_w as usize, target_h as usize, target_fps);
+        }
+
+        // Continuous repaint loop matching active capture framerate (16ms for 60fps, 33ms for 30fps)
+        if self.state.preview_open {
+            let repaint_ms = if self.video_engine.capture_fps() >= 50 {
+                16
+            } else {
+                33
+            };
+            ctx.request_repaint_after(Duration::from_millis(repaint_ms));
         }
 
         // 1. One-time hardware initialization once the physical video stream is open and delivering frames

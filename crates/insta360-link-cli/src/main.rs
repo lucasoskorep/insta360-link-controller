@@ -1006,7 +1006,9 @@ fn run(cli: Cli) -> Result<(), TransportError> {
             let device_info = ctrl.get_device_info()?;
             let ptz_version = ctrl.get_ptz_version_and_angles()?;
             let status = ctrl.get_device_status()?;
-            let (video_mode, video_mode_aux) = ctrl.get_video_mode()?;
+            let (video_mode, video_mode_aux) = ctrl
+                .get_video_mode()
+                .unwrap_or((VideoMode::Normal, VideoModeAuxData::default()));
             let extend_functions = ctrl.get_extend_function_status()?;
 
             let report = FullCameraInfoReport {

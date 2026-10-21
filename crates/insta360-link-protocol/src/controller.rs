@@ -941,6 +941,9 @@ impl<T: UvcControlTransport> Insta360CameraController<T> {
             }
             let mut bits = u16::from_le_bytes([cur[0], cur[1]]);
             let mask = 1u16 << (func as u8);
+            if ((bits & mask) != 0) == enable {
+                return Ok(());
+            }
             if enable {
                 bits |= mask;
             } else {
@@ -949,11 +952,20 @@ impl<T: UvcControlTransport> Insta360CameraController<T> {
             let bytes = bits.to_le_bytes();
             cur[0] = bytes[0];
             cur[1] = bytes[1];
-            return self.transport.set_cur(
+            let res = self.transport.set_cur(
                 self.unit_ids().extension_unit_id,
                 0x1b,
                 &cur,
             );
+            // Toggling `VerticalMode` or `LowResolution` triggers an immediate USB re-enumeration
+            // inside the camera firmware to expose the updated UVC frame/FPS descriptors.
+            if matches!(
+                func,
+                ExtendFunction::VerticalMode | ExtendFunction::LowResolution
+            ) {
+                return Ok(());
+            }
+            return res;
         }
         let cur = self
             .transport

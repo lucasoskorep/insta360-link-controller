@@ -883,15 +883,15 @@ fn render_more_tab<T: UvcControlTransport>(
             ui,
             "Portrait Resolution and High Frame Rate",
             None,
-            Some("Enable 9:16 portrait resolution output."),
+            Some("Unlock 60fps high frame rate and 9:16 portrait resolution in UVC."),
             &mut state.vertical_resolution_mode,
             !state.is_recording,
             theme,
         ) {
             let _ = ctrl.set_vertical_screen(state.vertical_resolution_mode);
-            if state.vertical_resolution_mode {
-                state.format_preset = crate::state::VideoFormatPreset::Vertical1080x1920p30;
-            } else {
+            if !state.vertical_resolution_mode
+                && (state.format_preset.is_vertical() || state.format_preset.fps() > 30)
+            {
                 state.format_preset = crate::state::VideoFormatPreset::Fhd1080p30;
             }
         }
