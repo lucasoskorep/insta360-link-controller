@@ -2059,6 +2059,12 @@ impl eframe::App for Insta360App {
                             .clamp(0.05_f32, 0.95_f32);
                         let cy = (((r.y as f32) + (r.height as f32) * 0.5_f32) / 10000.0_f32)
                             .clamp(0.05_f32, 0.95_f32);
+                        if self.self_test_enabled {
+                            println!(
+                                "[GUI-SELF-TEST] Detected 1 person rect={:?}, locking onto ({:.3}, {:.3})",
+                                r, cx, cy
+                            );
+                        }
                         let _ = self.controller.select_track_object_norm(cx, cy, 0.0_f32, 0.0_f32);
                         self.state.ready_auto_track = false;
                         self.state.tracked_targets.clear();
@@ -2286,13 +2292,9 @@ impl eframe::App for Insta360App {
                     self.state.pan_deg = p as f32 / 3600.0;
                     self.state.tilt_deg = t as f32 / 3600.0;
                 }
-                // Center back to (0, -12 deg) so the person in front of the desk is in frame
-                let _ = self.controller.set_pantilt_absolute(0, -43_200);
-                self.state.pan_deg = 0.0;
-                self.state.tilt_deg = -12.0;
-
                 println!(
-                    "[GUI-SELF-TEST] Step 3: Stopped joystick velocity; testing Toolbar Mode & activating AI Tracking"
+                    "[GUI-SELF-TEST] Step 3: Stopped joystick velocity (pan={:.1}, tilt={:.1}); testing Toolbar Mode & activating AI Tracking",
+                    self.state.pan_deg, self.state.tilt_deg
                 );
                 self.state.ui_mode = UiMode::Toolbar;
                 self.set_video_mode(VideoMode::AutoTracking);
