@@ -267,7 +267,7 @@ impl Insta360App {
             }
             self.state.video_mode = VideoMode::AutoTracking;
             self.state.ready_auto_track = true;
-            self.state.last_track_poll = None;
+            self.state.last_track_poll = Some(Instant::now());
             self.state.show_toast(
                 "AI Tracking ready — looking for person (or click on video to lock target)",
                 false,
@@ -2066,6 +2066,7 @@ impl eframe::App for Insta360App {
                             );
                         }
                         let _ = self.controller.select_track_object_norm(cx, cy, 0.0_f32, 0.0_f32);
+                        std::thread::sleep(Duration::from_millis(30));
                         self.state.ready_auto_track = false;
                         self.state.tracked_targets.clear();
                         let _ = self.controller.set_video_mode_raw(
@@ -2098,13 +2099,25 @@ impl eframe::App for Insta360App {
             if should_sync {
                 self.state.last_hw_sync = Some(Instant::now());
                 if !self.state.ready_auto_track {
-                    if let Ok((hw_mode, _)) = self.controller.get_video_mode() {
-                        if hw_mode != self.state.video_mode {
-                            self.state.video_mode = hw_mode;
-                            if hw_mode == VideoMode::Normal {
-                                self.state.tracked_targets.clear();
+                    match self.controller.get_video_mode() {
+                        Ok((hw_mode, _)) => {
+                            if hw_mode != self.state.video_mode {
+                                self.state.video_mode = hw_mode;
+                                if hw_mode == VideoMode::Normal {
+                                    self.state.tracked_targets.clear();
+                                }
                             }
                         }
+                        Err(_) if self.state.video_mode == VideoMode::AutoTracking => {
+                            // Firmware reported 0xff (target lock incomplete); re-enable 200ms target lock loop
+                            let _ = self.controller.set_video_mode_raw(
+                                VideoMode::Normal,
+                                &VideoModeAuxData::default(),
+                            );
+                            self.state.ready_auto_track = true;
+                            self.state.last_track_poll = Some(Instant::now());
+                        }
+                        Err(_) => {}
                     }
                 }
                 if self.state.video_mode == VideoMode::Normal && !self.state.ready_auto_track {
