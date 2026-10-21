@@ -255,16 +255,14 @@ impl Insta360App {
         if mode_to_set == VideoMode::AutoTracking {
             // `Webcam::CameraInsta::autoTrackClicked` (`0x10006c400`) ->
             // `onHandleVideoModeChangeEvent` (`0x10005a4cc`) -> `readyAutoTrack` (`0x10006c8c8`):
-            // 1. Ensure the camera is in `VideoMode::Normal` (`0`) so the firmware's person
+            // 1. Always ensure the camera is in `VideoMode::Normal` (`0`) so the firmware's person
             //    detector (`GetTrackObjLists`, `XU1 0x14`) runs on the live video stream.
             // 2. Do NOT send `SetTrackObj(0.5, 0.5)` or `SetVideoMode(AutoTracking)` before
             //    `GetTrackObjLists` detects a person — doing so aborts firmware person detection!
             // 3. Start the 200ms `ready_auto_track` polling loop (`SetCheckTrack(true)`).
-            if prev_mode != VideoMode::Normal {
-                let _ = self
-                    .controller
-                    .set_video_mode_raw(VideoMode::Normal, &VideoModeAuxData::default());
-            }
+            let _ = self
+                .controller
+                .set_video_mode_raw(VideoMode::Normal, &VideoModeAuxData::default());
             self.state.video_mode = VideoMode::AutoTracking;
             self.state.ready_auto_track = true;
             self.state.last_track_poll = None;
@@ -328,10 +326,27 @@ impl Insta360App {
                     ui.add_space(24.0_f32);
 
                     // Center: Camera Controller Selector
-                    let current_dev_label = self.selected_device.label();
+                    let show_simulators = cfg!(debug_assertions)
+                        || std::env::var("INSTA360_SIMULATOR")
+                            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                            .unwrap_or(false);
+
+                    let current_dev_label = match &self.selected_device {
+                        DeviceSelection::Usb(_) => self.selected_device.label(),
+                        DeviceSelection::Simulate(_) if show_simulators => {
+                            self.selected_device.label()
+                        }
+                        DeviceSelection::Simulate(_) => "No Camera Connected".to_string(),
+                    };
+
                     egui::ComboBox::from_id_salt("top_camera_selector")
                         .selected_text(&current_dev_label)
                         .show_ui(ui, |ui| {
+                            if self.connected_cameras.is_empty() && !show_simulators {
+                                ui.label(
+                                    RichText::new("No Camera Connected").color(theme.text03),
+                                );
+                            }
                             for cam in self.connected_cameras.clone() {
                                 let dev = DeviceSelection::Usb(cam);
                                 let label = dev.label();
@@ -339,18 +354,20 @@ impl Insta360App {
                                     self.switch_camera(dev);
                                 }
                             }
-                            if !self.connected_cameras.is_empty() {
-                                ui.separator();
-                            }
-                            for model in [
-                                CameraModel::Link2,
-                                CameraModel::Link2C,
-                                CameraModel::Link,
-                            ] {
-                                let dev = DeviceSelection::Simulate(model);
-                                let label = dev.label();
-                                if ui.selectable_label(self.selected_device == dev, label).clicked() {
-                                    self.switch_camera(dev);
+                            if show_simulators {
+                                if !self.connected_cameras.is_empty() {
+                                    ui.separator();
+                                }
+                                for model in [
+                                    CameraModel::Link2,
+                                    CameraModel::Link2C,
+                                    CameraModel::Link,
+                                ] {
+                                    let dev = DeviceSelection::Simulate(model);
+                                    let label = dev.label();
+                                    if ui.selectable_label(self.selected_device == dev, label).clicked() {
+                                        self.switch_camera(dev);
+                                    }
                                 }
                             }
                         });
@@ -359,46 +376,53 @@ impl Insta360App {
                     if refresh_btn.on_hover_text("Refresh USB camera devices").clicked() {
                         self.connected_cameras = list_connected_cameras().unwrap_or_default();
                         self.video_engine.refresh_capture_devices();
+                        if !matches!(self.selected_device, DeviceSelection::Usb(_)) {
+                            if let Some(first) = self.connected_cameras.first().cloned() {
+                                self.switch_camera(DeviceSelection::Usb(first));
+                            }
+                        }
                         self.state.show_toast("Refreshed USB devices", false);
                     }
 
-                    ui.add_space(10.0_f32);
+                    if show_simulators {
+                        ui.add_space(10.0_f32);
 
-                    // Video Feed Source Selector
-                    let active_feed_label = if self.video_engine.is_using_physical_capture() {
-                        self.video_engine
-                            .active_capture_device()
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| "Physical Webcam".to_string())
-                    } else {
-                        "Studio Camera Feed (Live)".to_string()
-                    };
+                        // Video Feed Source Selector (debug / simulator mode only)
+                        let active_feed_label = if self.video_engine.is_using_physical_capture() {
+                            self.video_engine
+                                .active_capture_device()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "Physical Webcam".to_string())
+                        } else {
+                            "Studio Camera Feed (Live)".to_string()
+                        };
 
-                    egui::ComboBox::from_id_salt("top_video_feed_selector")
-                        .selected_text(&active_feed_label)
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(
-                                    !self.video_engine.is_using_physical_capture(),
-                                    "Studio Camera Feed (Live)",
-                                )
-                                .clicked()
-                            {
-                                self.video_engine.stop_physical_capture();
-                            }
-                            let devs = self.video_engine.available_capture_devices().to_vec();
-                            for dev_name in devs {
-                                let is_active = self.video_engine.is_using_physical_capture()
-                                    && self
-                                        .video_engine
-                                        .active_capture_device()
-                                        .map(|d| d == dev_name.as_str())
-                                        .unwrap_or(false);
-                                if ui.selectable_label(is_active, dev_name.as_str()).clicked() {
-                                    self.video_engine.start_physical_capture(&dev_name);
+                        egui::ComboBox::from_id_salt("top_video_feed_selector")
+                            .selected_text(&active_feed_label)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(
+                                        !self.video_engine.is_using_physical_capture(),
+                                        "Studio Camera Feed (Live)",
+                                    )
+                                    .clicked()
+                                {
+                                    self.video_engine.stop_physical_capture();
                                 }
-                            }
-                        });
+                                let devs = self.video_engine.available_capture_devices().to_vec();
+                                for dev_name in devs {
+                                    let is_active = self.video_engine.is_using_physical_capture()
+                                        && self
+                                            .video_engine
+                                            .active_capture_device()
+                                            .map(|d| d == dev_name.as_str())
+                                            .unwrap_or(false);
+                                    if ui.selectable_label(is_active, dev_name.as_str()).clicked() {
+                                        self.video_engine.start_physical_capture(&dev_name);
+                                    }
+                                }
+                            });
+                    }
 
                     // Right group
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -766,7 +790,12 @@ impl Insta360App {
         }
 
         // Interactive click-and-drag pan/tilt (`DefCamera.qml` `dragMovePanTilt` + `dragDropTransition`)
-        if video_response.dragged() && self.controller.capabilities().support_ptz_drag {
+        // Only active in Normal mode (`!ready_auto_track`) so clicking on the video during AI Tracking
+        // does not send a manual PTZ velocity/stop command that aborts tracking.
+        let manual_ptz_drag_allowed = self.controller.capabilities().support_ptz_drag
+            && self.state.video_mode == VideoMode::Normal
+            && !self.state.ready_auto_track;
+        if video_response.dragged() && manual_ptz_drag_allowed {
             let drag_delta = video_response.drag_delta();
             if drag_delta.length_sq() > 0.25_f32 {
                 self.state.pan_deg =
@@ -801,7 +830,7 @@ impl Insta360App {
                     self.state.last_ptz_send_time = Some(Instant::now());
                 }
             }
-        } else if video_response.drag_stopped() && self.controller.capabilities().support_ptz_drag {
+        } else if video_response.drag_stopped() && manual_ptz_drag_allowed {
             let _ = self.controller.stop_pantilt_relative();
             self.state.last_ptz_cmd = (0, 0, 0, 0);
         }
@@ -1986,12 +2015,6 @@ impl eframe::App for Insta360App {
                     .controller
                     .set_video_mode_raw(VideoMode::Normal, &VideoModeAuxData::default());
                 self.state.video_mode = VideoMode::Normal;
-            }
-            // If the camera was pointed straight down into its black neck/base, reset to (0, 0)
-            if self.state.tilt_deg < -65.0_f32 && self.state.pan_deg.abs() < 15.0_f32 {
-                let _ = self.controller.set_pantilt_absolute(0, 0);
-                self.state.pan_deg = 0.0_f32;
-                self.state.tilt_deg = 0.0_f32;
             }
         }
 

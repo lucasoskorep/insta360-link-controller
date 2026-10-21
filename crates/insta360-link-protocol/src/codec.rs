@@ -111,6 +111,11 @@ pub fn decode_get_video_mode(data: &[u8]) -> Result<(VideoMode, VideoModeAuxData
             actual: data.len(),
         });
     }
+    if data[0] == 0xff {
+        return Err(CodecError::InvalidArgument(
+            "camera video mode is transitioning (0xff)",
+        ));
+    }
     let mode = VideoMode::from_u8(data[0]);
     let mut aux = VideoModeAuxData {
         flags: data[1],
