@@ -2227,43 +2227,6 @@ impl eframe::App for Insta360App {
                 let _ = self.controller.set_power_line_frequency(PowerLineFrequency::Hz60);
                 let pl_60 = self.controller.get_power_line_frequency().ok();
 
-                let _ = self.controller.set_hdr(true);
-                let hdr_on = self
-                    .controller
-                    .get_extend_function_status()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|(f, _)| *f == insta360_link_protocol::ExtendFunction::Hdr)
-                    .map(|(_, v)| v);
-                let _ = self.controller.set_hdr(false);
-                let hdr_off = self
-                    .controller
-                    .get_extend_function_status()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|(f, _)| *f == insta360_link_protocol::ExtendFunction::Hdr)
-                    .map(|(_, v)| v);
-
-                let _ = self.controller.set_horizontal_mirror(true);
-                let hmir_on = self
-                    .controller
-                    .get_extend_function_status()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|(f, _)| *f == insta360_link_protocol::ExtendFunction::HorizontalMirror)
-                    .map(|(_, v)| v);
-                let _ = self.controller.set_horizontal_mirror(false);
-
-                let _ = self.controller.set_vertical_mirror(true);
-                let vmir_on = self
-                    .controller
-                    .get_extend_function_status()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|(f, _)| *f == insta360_link_protocol::ExtendFunction::VerticalMirror)
-                    .map(|(_, v)| v);
-                let _ = self.controller.set_vertical_mirror(false);
-
                 let _ = self.controller.set_audio_noise_reduction(false);
                 let nr_off = self.controller.get_audio_noise_reduction().ok();
                 let _ = self.controller.set_audio_noise_reduction(true);
@@ -2276,7 +2239,7 @@ impl eframe::App for Insta360App {
                 let gest = self.controller.get_gesture_status().ok();
 
                 println!(
-                    "[GUI-SELF-TEST] Hardware Settings Verified:\n  zoom={z_read}, track_speed=({ts_fast:?} -> {ts_norm:?})\n  AE=({ae_off} -> {ae_on}), EV=({ev_15:.1} -> {ev_0:.1}), ISO={iso_400}, Shutter=1/{sh_120}s\n  AF=({af_off} -> {af_on}), Focus={f_60}, AWB=({awb_off} -> {awb_on}), WB={wb_4200}K\n  Bright={br_65}, Contrast={ct_65}, Sat={sat_65}, Sharp={sh_65}\n  AntiFlicker=({pl_50:?} -> {pl_60:?}), HDR=({hdr_on:?} -> {hdr_off:?})\n  HFlip={hmir_on:?}, VFlip={vmir_on:?}, AudioDenoise=({nr_off:?} -> {nr_on:?}), Gestures={gest:?}"
+                    "[GUI-SELF-TEST] Hardware Settings Verified:\n  zoom={z_read}, track_speed=({ts_fast:?} -> {ts_norm:?})\n  AE=({ae_off} -> {ae_on}), EV=({ev_15:.1} -> {ev_0:.1}), ISO={iso_400}, Shutter=1/{sh_120}s\n  AF=({af_off} -> {af_on}), Focus={f_60}, AWB=({awb_off} -> {awb_on}), WB={wb_4200}K\n  Bright={br_65}, Contrast={ct_65}, Sat={sat_65}, Sharp={sh_65}\n  AntiFlicker=({pl_50:?} -> {pl_60:?}), AudioDenoise=({nr_off:?} -> {nr_on:?}), Gestures={gest:?}"
                 );
 
                 println!(
