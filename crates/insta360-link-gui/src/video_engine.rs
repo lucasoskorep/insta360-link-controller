@@ -7,7 +7,7 @@ use insta360_link_protocol::{TrackSpeed, UvcRect, VideoMode};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -60,6 +60,9 @@ pub struct VideoPreviewEngine {
     capture_stop: Arc<AtomicBool>,
     capture_child: Arc<Mutex<Option<Child>>>,
     capture_frame: Arc<Mutex<Option<(usize, usize, Vec<u8>)>>>,
+    frame_seq: Arc<AtomicU64>,
+    last_rendered_seq: u64,
+    last_effects_key: (FilterMode, bool, u8),
     recording_stdin: Arc<Mutex<Option<(ChildStdin, usize, usize)>>>,
     recording_child: Option<Child>,
     recording_path: Option<PathBuf>,
@@ -97,6 +100,9 @@ impl VideoPreviewEngine {
             capture_stop: Arc::new(AtomicBool::new(false)),
             capture_child: Arc::new(Mutex::new(None)),
             capture_frame: Arc::new(Mutex::new(None)),
+            frame_seq: Arc::new(AtomicU64::new(0)),
+            last_rendered_seq: 0,
+            last_effects_key: (FilterMode::None, false, 0),
             recording_stdin: Arc::new(Mutex::new(None)),
             recording_child: None,
             recording_path: None,
@@ -283,6 +289,7 @@ impl VideoPreviewEngine {
 
         let stop_flag = self.capture_stop.clone();
         let frame_buf = self.capture_frame.clone();
+        let frame_seq = self.frame_seq.clone();
         let child_store = self.capture_child.clone();
         let rec_stdin = self.recording_stdin.clone();
         let out_w = self.capture_width;
@@ -438,6 +445,7 @@ impl VideoPreviewEngine {
                         }
                         if let Ok(mut lock) = frame_buf.lock() {
                             *lock = Some((out_w, out_h, buffer.clone()));
+                            frame_seq.fetch_add(1, Ordering::Release);
                         }
                     } else {
                         break;
@@ -466,28 +474,29 @@ impl VideoPreviewEngine {
         self.active_device = None;
     }
 
-    /// Renders a full frame (either physical or virtual studio), processes all real-time
-    /// filters/effects, uploads to egui GPU texture, and returns the texture handle.
+    /// Renders a full frame (either physical or virtual studio) at the selected capture resolution,
+    /// processes real-time filters/effects, uploads to egui GPU texture, and returns the texture handle.
     pub fn render_frame(&mut self, ctx: &Context, state: &mut CameraAppState) -> TextureHandle {
         let now = Instant::now();
         let dt = (now - self.last_frame_time).as_secs_f32().clamp(0.001_f32, 0.1_f32);
         self.last_frame_time = now;
         let elapsed = self.start_time.elapsed().as_secs_f32();
 
-        // 1. Output dimensions
-        let (out_w, out_h) = if state.low_resolution_mode {
-            if state.vertical_resolution_mode {
-                (270, 480)
-            } else {
-                (480, 270)
-            }
-        } else if state.vertical_resolution_mode {
-            (360, 640)
-        } else {
-            (640, 360)
-        };
+        let cur_seq = self.frame_seq.load(Ordering::Acquire);
+        let effects_key = (state.filter_mode, state.makeup_enabled, state.makeup_intensity);
 
-        // 2. Obtain raw RGB frame
+        // Fast-path: if physical capture is active and neither the frame nor host effects changed,
+        // return the existing GPU texture handle without re-converting or re-uploading.
+        if self.is_using_physical_capture()
+            && cur_seq > 0
+            && cur_seq == self.last_rendered_seq
+            && effects_key == self.last_effects_key
+        {
+            if let Some(ref th) = self.texture_handle {
+                return th.clone();
+            }
+        }
+
         let physical_opt = self.capture_frame.lock().ok().and_then(|guard| guard.clone());
         let is_physical_active = self.is_using_physical_capture() && physical_opt.is_some();
         let is_insta360_hw_stream = self
@@ -496,37 +505,61 @@ impl VideoPreviewEngine {
             .map(|d| d.to_lowercase().contains("insta360"))
             .unwrap_or(false);
 
-        let mut frame_pixels = if is_physical_active {
-            let (src_w, src_h, ref raw_rgb) = physical_opt.unwrap();
-            self.crop_physical_frame(
-                raw_rgb,
-                src_w,
-                src_h,
-                out_w,
-                out_h,
-                state,
-                is_insta360_hw_stream,
-            )
-        } else {
-            self.render_virtual_studio_frame(out_w, out_h, elapsed, dt, state)
-        };
+        let color_image = if is_physical_active {
+            let (src_w, src_h, raw_rgb) = physical_opt.unwrap();
+            self.last_rendered_seq = cur_seq;
+            self.last_effects_key = effects_key;
 
-        // 3. Real-Time Image & Color Pipeline
-        if is_physical_active && is_insta360_hw_stream {
-            // Physical Insta360 camera applies PTZ, zoom, exposure, WB, brightness, contrast,
-            // saturation, sharpness, and mirror in hardware; apply host-side effects (filters, makeup).
-            self.apply_host_effects_only(&mut frame_pixels, state);
+            if is_insta360_hw_stream && !state.makeup_enabled && state.filter_mode == FilterMode::None {
+                // Zero-downscale native resolution fast path (360p, 720p, 1080p, 4K)
+                ColorImage::from_rgb([src_w, src_h], &raw_rgb)
+            } else {
+                let (out_w, out_h) = if src_w > 1920 {
+                    (1920, (src_h * 1920) / src_w.max(1))
+                } else {
+                    (src_w, src_h)
+                };
+                let mut frame_pixels = self.crop_physical_frame(
+                    &raw_rgb,
+                    src_w,
+                    src_h,
+                    out_w,
+                    out_h,
+                    state,
+                    is_insta360_hw_stream,
+                );
+                if is_insta360_hw_stream {
+                    self.apply_host_effects_only(&mut frame_pixels, state);
+                } else {
+                    self.apply_image_pipeline(&mut frame_pixels, out_w, out_h, state);
+                }
+                let mut pixels = Vec::with_capacity(out_w * out_h);
+                for p in frame_pixels {
+                    pixels.push(p.to_color32());
+                }
+                ColorImage {
+                    size: [out_w, out_h],
+                    pixels,
+                }
+            }
         } else {
+            let (out_w, out_h) = if state.low_resolution_mode {
+                if state.vertical_resolution_mode {
+                    (270, 480)
+                } else {
+                    (480, 270)
+                }
+            } else if state.vertical_resolution_mode {
+                (360, 640)
+            } else {
+                (640, 360)
+            };
+            let mut frame_pixels = self.render_virtual_studio_frame(out_w, out_h, elapsed, dt, state);
             self.apply_image_pipeline(&mut frame_pixels, out_w, out_h, state);
-        }
-
-        // 4. Convert to egui::ColorImage
-        let mut pixels = Vec::with_capacity(out_w * out_h);
-        for p in frame_pixels {
-            pixels.push(p.to_color32());
-        }
-
-        if !is_physical_active {
+            let mut pixels = Vec::with_capacity(out_w * out_h);
+            for p in frame_pixels {
+                pixels.push(p.to_color32());
+            }
             if let Ok(mut rec_lock) = self.recording_stdin.lock() {
                 if let Some((ref mut stdin, rw, rh)) = *rec_lock {
                     let mut rgb24 = Vec::with_capacity(rw * rh * 3);
@@ -543,14 +576,13 @@ impl VideoPreviewEngine {
                     let _ = stdin.write_all(&rgb24);
                 }
             }
-        }
-
-        let color_image = ColorImage {
-            size: [out_w, out_h],
-            pixels,
+            ColorImage {
+                size: [out_w, out_h],
+                pixels,
+            }
         };
 
-        // 5. Upload to TextureHandle
+        // Upload to TextureHandle
         let texture_options = TextureOptions::LINEAR;
         let handle = if let Some(ref mut th) = self.texture_handle {
             th.set(color_image.clone(), texture_options);

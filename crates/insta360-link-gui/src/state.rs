@@ -2,6 +2,7 @@
 
 use egui::{ColorImage, Pos2, TextureHandle};
 pub use insta360_link_protocol::*;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -52,7 +53,7 @@ pub enum BackgroundEffectMode {
 }
 
 /// Resolution & frame rate preset (`DefFormatCombo.qml`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VideoFormatPreset {
     Uhd4k30,
     Fhd1080p60,
@@ -281,6 +282,81 @@ pub struct CameraAppState {
     pub ready_auto_track: bool,
     pub last_track_poll: Option<Instant>,
     pub last_hw_sync: Option<Instant>,
+    pub last_saved_settings: Option<PersistedAppSettings>,
+}
+
+/// User settings persisted across sessions in `~/.config/insta360-link-controller/settings.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersistedAppSettings {
+    pub format_preset: VideoFormatPreset,
+    pub auto_exposure: bool,
+    pub ev_compensation: f32,
+    pub iso_index: usize,
+    pub shutter_index: usize,
+    pub auto_focus: bool,
+    pub manual_focus: u16,
+    pub auto_white_balance: bool,
+    pub wb_kelvin: u16,
+    pub brightness: i16,
+    pub contrast: u16,
+    pub saturation: u16,
+    pub sharpness: u16,
+    pub hdr_enabled: bool,
+    pub anti_flicker: PowerLineFrequency,
+    pub startup_params_enabled: bool,
+    pub filter_mode: FilterMode,
+    pub makeup_enabled: bool,
+    pub makeup_intensity: u8,
+    pub track_speed: TrackSpeed,
+    pub enable_single_tap_tracking: bool,
+    pub enable_all_gestures: bool,
+    pub use_gesture_palm: bool,
+    pub use_gesture_v: bool,
+    pub use_gesture_l: bool,
+    pub audio_denoise: bool,
+    pub horizontal_mirror: bool,
+    pub vertical_mirror: bool,
+    pub smart_adjustment: bool,
+    pub horizontal_correction: bool,
+    pub roll_deg: f32,
+    pub vertical_resolution_mode: bool,
+    pub forced_vertical_lock: bool,
+    pub low_resolution_mode: bool,
+}
+
+impl PersistedAppSettings {
+    pub fn config_path() -> PathBuf {
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            if !xdg.trim().is_empty() {
+                return PathBuf::from(xdg)
+                    .join("insta360-link-controller")
+                    .join("settings.json");
+            }
+        }
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."));
+        home.join(".config")
+            .join("insta360-link-controller")
+            .join("settings.json")
+    }
+
+    pub fn load() -> Option<Self> {
+        let path = Self::config_path();
+        let data = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
+    pub fn save(&self) {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(path, json);
+        }
+    }
 }
 
 impl Default for CameraAppState {
@@ -328,7 +404,7 @@ impl Default for CameraAppState {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("."));
 
-        Self {
+        let mut s = Self {
             is_light_mode: false,
             ui_mode: UiMode::MainWindow,
             right_tab: RightSidebarTab::View,
@@ -489,12 +565,94 @@ impl Default for CameraAppState {
             ready_auto_track: false,
             last_track_poll: None,
             last_hw_sync: None,
+            last_saved_settings: None,
+        };
+        if let Some(saved) = PersistedAppSettings::load() {
+            s.apply_persisted(&saved);
+            s.last_saved_settings = Some(saved);
         }
+        s
     }
 }
 
 impl CameraAppState {
     pub fn show_toast(&mut self, msg: impl Into<String>, is_error: bool) {
         self.toast_message = Some((msg.into(), Instant::now(), is_error));
+    }
+
+    pub fn to_persisted(&self) -> PersistedAppSettings {
+        PersistedAppSettings {
+            format_preset: self.format_preset,
+            auto_exposure: self.auto_exposure,
+            ev_compensation: (self.ev_compensation * 10.0).round() / 10.0,
+            iso_index: self.iso_index,
+            shutter_index: self.shutter_index,
+            auto_focus: self.auto_focus,
+            manual_focus: self.manual_focus,
+            auto_white_balance: self.auto_white_balance,
+            wb_kelvin: self.wb_kelvin,
+            brightness: self.brightness,
+            contrast: self.contrast,
+            saturation: self.saturation,
+            sharpness: self.sharpness,
+            hdr_enabled: self.hdr_enabled,
+            anti_flicker: self.anti_flicker,
+            startup_params_enabled: self.startup_params_enabled,
+            filter_mode: self.filter_mode,
+            makeup_enabled: self.makeup_enabled,
+            makeup_intensity: self.makeup_intensity,
+            track_speed: self.track_speed,
+            enable_single_tap_tracking: self.enable_single_tap_tracking,
+            enable_all_gestures: self.enable_all_gestures,
+            use_gesture_palm: self.use_gesture_palm,
+            use_gesture_v: self.use_gesture_v,
+            use_gesture_l: self.use_gesture_l,
+            audio_denoise: self.audio_denoise,
+            horizontal_mirror: self.horizontal_mirror,
+            vertical_mirror: self.vertical_mirror,
+            smart_adjustment: self.smart_adjustment,
+            horizontal_correction: self.horizontal_correction,
+            roll_deg: (self.roll_deg * 10.0).round() / 10.0,
+            vertical_resolution_mode: self.vertical_resolution_mode,
+            forced_vertical_lock: self.forced_vertical_lock,
+            low_resolution_mode: self.low_resolution_mode,
+        }
+    }
+
+    pub fn apply_persisted(&mut self, p: &PersistedAppSettings) {
+        self.format_preset = p.format_preset;
+        self.auto_exposure = p.auto_exposure;
+        self.ev_compensation = p.ev_compensation;
+        self.iso_index = p.iso_index.min(ISO_LIST.len() - 1);
+        self.shutter_index = p.shutter_index.min(SHUTTER_DENOM_LIST.len() - 1);
+        self.auto_focus = p.auto_focus;
+        self.manual_focus = p.manual_focus.min(100);
+        self.auto_white_balance = p.auto_white_balance;
+        self.wb_kelvin = p.wb_kelvin.clamp(2000, 10000);
+        self.brightness = p.brightness.clamp(0, 100);
+        self.contrast = p.contrast.min(100);
+        self.saturation = p.saturation.min(100);
+        self.sharpness = p.sharpness.min(100);
+        self.hdr_enabled = p.hdr_enabled;
+        self.anti_flicker = p.anti_flicker;
+        self.startup_params_enabled = p.startup_params_enabled;
+        self.filter_mode = p.filter_mode;
+        self.makeup_enabled = p.makeup_enabled;
+        self.makeup_intensity = p.makeup_intensity.min(100);
+        self.track_speed = p.track_speed;
+        self.enable_single_tap_tracking = p.enable_single_tap_tracking;
+        self.enable_all_gestures = p.enable_all_gestures;
+        self.use_gesture_palm = p.use_gesture_palm;
+        self.use_gesture_v = p.use_gesture_v;
+        self.use_gesture_l = p.use_gesture_l;
+        self.audio_denoise = p.audio_denoise;
+        self.horizontal_mirror = p.horizontal_mirror;
+        self.vertical_mirror = p.vertical_mirror;
+        self.smart_adjustment = p.smart_adjustment;
+        self.horizontal_correction = p.horizontal_correction;
+        self.roll_deg = p.roll_deg.clamp(-1.0, 1.0);
+        self.vertical_resolution_mode = p.vertical_resolution_mode;
+        self.forced_vertical_lock = p.forced_vertical_lock;
+        self.low_resolution_mode = p.low_resolution_mode;
     }
 }

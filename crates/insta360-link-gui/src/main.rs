@@ -236,12 +236,106 @@ impl Insta360App {
         if let Ok(ae) = self.controller.get_auto_exposure() {
             self.state.auto_exposure = ae;
         }
+        if let Ok(ev) = self.controller.get_exposure_compensation() {
+            self.state.ev_compensation = ev.clamp(-3.0_f32, 3.0_f32);
+        }
+        if let Ok(iso) = self.controller.get_iso() {
+            if let Some(idx) = crate::state::ISO_LIST.iter().position(|&v| v == iso) {
+                self.state.iso_index = idx;
+            }
+        }
+        if let Ok(shutter) = self.controller.get_shutter_speed() {
+            if let Some(idx) = crate::state::SHUTTER_DENOM_LIST
+                .iter()
+                .position(|&v| v == shutter)
+            {
+                self.state.shutter_index = idx;
+            }
+        }
         if let Ok(af) = self.controller.get_auto_focus() {
             self.state.auto_focus = af;
+        }
+        if let Ok(focus) = self.controller.get_focus() {
+            self.state.manual_focus = focus.min(100);
+        }
+        if let Ok(pl) = self.controller.get_power_line_frequency() {
+            self.state.anti_flicker = pl;
+        }
+        if let Ok(roll) = self.controller.get_roll() {
+            self.state.roll_deg = (roll as f32 / 10.0_f32).clamp(-1.0_f32, 1.0_f32);
         }
         if let Ok(denoise) = self.controller.get_audio_noise_reduction() {
             self.state.audio_denoise = denoise;
         }
+    }
+
+    fn apply_saved_settings_to_hardware(&mut self) {
+        let Some(saved) = self.state.last_saved_settings.clone() else {
+            self.state.last_saved_settings = Some(self.state.to_persisted());
+            return;
+        };
+        self.state.apply_persisted(&saved);
+        let _ = self.controller.set_brightness(self.state.brightness);
+        let _ = self.controller.set_contrast(self.state.contrast);
+        let _ = self.controller.set_saturation(self.state.saturation);
+        let _ = self.controller.set_sharpness(self.state.sharpness);
+        let _ = self
+            .controller
+            .set_auto_white_balance(self.state.auto_white_balance);
+        if !self.state.auto_white_balance {
+            let _ = self
+                .controller
+                .set_white_balance_temperature(self.state.wb_kelvin);
+        }
+        let _ = self.controller.set_auto_focus(self.state.auto_focus);
+        if !self.state.auto_focus {
+            let _ = self.controller.set_focus(self.state.manual_focus);
+        }
+        let _ = self
+            .controller
+            .set_power_line_frequency(self.state.anti_flicker);
+        let _ = self.controller.set_hdr(self.state.hdr_enabled);
+        if !self.state.hdr_enabled {
+            let _ = self.controller.set_auto_exposure(self.state.auto_exposure);
+            if self.state.auto_exposure {
+                let _ = self
+                    .controller
+                    .set_exposure_compensation(self.state.ev_compensation);
+            } else {
+                if let Some(&iso) = crate::state::ISO_LIST.get(self.state.iso_index) {
+                    let _ = self.controller.set_iso(iso);
+                }
+                if let Some(&shutter) = crate::state::SHUTTER_DENOM_LIST.get(self.state.shutter_index)
+                {
+                    let _ = self.controller.set_shutter_speed(shutter);
+                }
+            }
+        }
+        let _ = self.controller.set_track_speed(self.state.track_speed);
+        let _ = self
+            .controller
+            .set_single_tap_tracking_enabled(self.state.enable_single_tap_tracking);
+        let _ = self
+            .controller
+            .set_all_gestures_enabled(self.state.enable_all_gestures);
+        let _ = self.controller.set_gesture_enabled(
+            insta360_link_protocol::Gesture::Palm,
+            self.state.use_gesture_palm,
+        );
+        let _ = self.controller.set_gesture_enabled(
+            insta360_link_protocol::Gesture::VShape,
+            self.state.use_gesture_v,
+        );
+        let _ = self.controller.set_gesture_enabled(
+            insta360_link_protocol::Gesture::LShape,
+            self.state.use_gesture_l,
+        );
+        let _ = self
+            .controller
+            .set_audio_noise_reduction(self.state.audio_denoise);
+        let _ = self
+            .controller
+            .set_horizontal_mirror(self.state.horizontal_mirror);
     }
 
     fn set_video_mode(&mut self, target_mode: VideoMode) {
@@ -2007,7 +2101,13 @@ impl eframe::App for Insta360App {
         // 1. One-time hardware initialization once the physical video stream is open and delivering frames
         if self.video_engine.has_live_physical_frame() && !self.state.stream_initialized {
             self.state.stream_initialized = true;
+            let had_saved_settings = self.state.last_saved_settings.is_some();
             self.sync_device_info();
+            if had_saved_settings && !self.self_test_enabled {
+                self.apply_saved_settings_to_hardware();
+            } else {
+                self.state.last_saved_settings = Some(self.state.to_persisted());
+            }
             // If the camera was left in Overhead or DeskView mode (which flips the ISP 180 degrees),
             // restore Normal mode so the live video stream is right-side up.
             if self.state.video_mode == VideoMode::OverheadShot
@@ -2017,6 +2117,15 @@ impl eframe::App for Insta360App {
                     .controller
                     .set_video_mode_raw(VideoMode::Normal, &VideoModeAuxData::default());
                 self.state.video_mode = VideoMode::Normal;
+            }
+        }
+
+        // 1b. Persist user settings to ~/.config/insta360-link-controller/settings.json whenever modified
+        if self.state.stream_initialized && !self.self_test_enabled {
+            let cur_persisted = self.state.to_persisted();
+            if self.state.last_saved_settings.as_ref() != Some(&cur_persisted) {
+                cur_persisted.save();
+                self.state.last_saved_settings = Some(cur_persisted);
             }
         }
 
