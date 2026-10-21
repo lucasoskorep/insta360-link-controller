@@ -254,15 +254,17 @@ impl Insta360App {
 
         if mode_to_set == VideoMode::AutoTracking {
             // `Webcam::CameraInsta::autoTrackClicked` (`0x10006c400`) ->
-            // `onHandleVideoModeChangeEvent` (`0x10005a4cc`) -> `readyAutoTrack` (`0x10006c8c8`):
-            // 1. Always ensure the camera is in `VideoMode::Normal` (`0`) so the firmware's person
-            //    detector (`GetTrackObjLists`, `XU1 0x14`) runs on the live video stream.
+            // `onHandleVideoModeChangeEvent` (`0x10005a400`..`0x10005a4cc`) -> `readyAutoTrack` (`0x10006c8c8`):
+            // 1. If the camera was in a non-Normal mode (`>= 2`: Whiteboard, Overhead, DeskView),
+            //    first exit to `VideoMode::Normal` (`0`) so `GetTrackObjLists` (`XU1 0x14`) runs.
             // 2. Do NOT send `SetTrackObj(0.5, 0.5)` or `SetVideoMode(AutoTracking)` before
             //    `GetTrackObjLists` detects a person — doing so aborts firmware person detection!
             // 3. Start the 200ms `ready_auto_track` polling loop (`SetCheckTrack(true)`).
-            let _ = self
-                .controller
-                .set_video_mode_raw(VideoMode::Normal, &VideoModeAuxData::default());
+            if prev_mode != VideoMode::Normal && prev_mode != VideoMode::AutoTracking {
+                let _ = self
+                    .controller
+                    .set_video_mode_raw(VideoMode::Normal, &VideoModeAuxData::default());
+            }
             self.state.video_mode = VideoMode::AutoTracking;
             self.state.ready_auto_track = true;
             self.state.last_track_poll = None;
@@ -2116,6 +2118,9 @@ impl eframe::App for Insta360App {
             let elapsed = start.elapsed().as_secs_f32();
             if self.self_test_step == 0 && elapsed >= 3.2 {
                 self.self_test_step = 1;
+                if self.state.video_mode != VideoMode::Normal {
+                    self.set_video_mode(VideoMode::Normal);
+                }
                 if let Ok((p, t)) = self.controller.get_pantilt_absolute() {
                     self.state.pan_deg = p as f32 / 3600.0;
                     self.state.tilt_deg = t as f32 / 3600.0;
